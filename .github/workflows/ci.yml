@@ -50,7 +50,7 @@ jobs:
         run: pnpm -C web build
 
       # Backend
-      - uses: astral-sh/setup-uv@v10
+      - uses: astral-sh/setup-uv@v10.3.3  # no moving major tag upstream
         with:
           enable-cache: true
       - run: uv sync --locked
