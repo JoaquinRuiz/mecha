@@ -431,7 +431,7 @@ Seis fases; cada una se cierra con los tests en verde y sus criterios cumplidos 
 
 `uv init --package`, estructura del repo, app Vite con shadcn/ui, justfile y CI.
 
-- [ ] `uv run mecha serve` sirve una página vacía protegida por token de sesión.
+- [x] `uv run mecha serve` sirve una página vacía protegida por token de sesión.
 - [ ] `uv run pytest` y el build del frontend pasan en CI.
 
 ### Fase 1 · Núcleo offline
