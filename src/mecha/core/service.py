@@ -5,10 +5,14 @@ Takes raw input, returns models. Never returns, logs or raises with a plaintext 
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable
+import asyncio
+import builtins
+import logging
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
+from mecha.core.config import Config
 from mecha.core.detect import Detection, detect
 from mecha.core.errors import (
     AmbiguousProviderError,
@@ -16,11 +20,25 @@ from mecha.core.errors import (
     DuplicateCredentialError,
     NotFoundError,
 )
-from mecha.core.models import CheckResult, Credential, CredentialKind, Overall, ProviderId
+from mecha.core.http import HttpSettings, make_client
+from mecha.core.models import (
+    CheckResult,
+    CheckStatus,
+    Credential,
+    CredentialKind,
+    Overall,
+    ProviderError,
+    ProviderId,
+)
 from mecha.core.normalize import normalize_secret
-from mecha.core.status import Thresholds, evaluate_offline
+from mecha.core.status import Observation, Thresholds, evaluate
 from mecha.core.ulid import new_ulid
+from mecha.providers import get_provider
+from mecha.providers.base import Provider, ProviderContext, remote_kinds
 from mecha.store.db import Store
+
+log = logging.getLogger(__name__)
+
 
 MIN_UNKNOWN_LENGTH = 16
 MIN_ID_PREFIX = 4
@@ -39,9 +57,17 @@ def _utcnow() -> datetime:
 
 
 @dataclass(frozen=True)
+class LastKnown:
+    overall: Overall
+    checked_at: datetime
+
+
+@dataclass(frozen=True)
 class CredentialStatus:
     credential: Credential
     result: CheckResult
+    last_known: LastKnown | None = None  # last non-grey result (shown on grey cards)
+    cached: bool = False  # result reused because of the minimum interval
 
 
 def _clean_tags(tags: Iterable[str]) -> list[str]:
@@ -59,12 +85,22 @@ class MechaService:
         open_store: Callable[[], Store],
         *,
         now: Callable[[], datetime] = _utcnow,
+        config: Config | None = None,
         thresholds: Thresholds | None = None,
     ) -> None:
         self._open_store = open_store
         self._store: Store | None = None
         self._now = now
-        self.thresholds = thresholds or Thresholds()
+        self.config = config or Config()
+        cfg_th = self.config.thresholds
+        self.thresholds = thresholds or Thresholds(
+            soon_days=cfg_th.soon_days, low_funds_usd=cfg_th.low_funds_usd
+        )
+        self._global = asyncio.Semaphore(self.config.scheduler.concurrency)
+        self._per_provider: dict[ProviderId, asyncio.Semaphore] = {}
+
+    def now(self) -> datetime:
+        return self._now()
 
     @property
     def store(self) -> Store:
@@ -187,11 +223,15 @@ class MechaService:
         raise DetectionError(f"This credential is a {detected_kind.value}, not a {kind.value}.")
 
     # --- list / get / remove --------------------------------------------------------
-    def _status(self, cred: Credential) -> CredentialStatus:
-        return CredentialStatus(cred, evaluate_offline(cred, self._now(), self.thresholds))
+    def _status(self, cred: Credential, *, cached: bool = False) -> CredentialStatus:
+        obs = self.store.last_observation(cred.id)
+        result = evaluate(cred, obs, self._now(), self.thresholds)
+        known = self.store.last_known(cred.id)
+        last_known = LastKnown(*known) if known else None
+        return CredentialStatus(cred, result, last_known, cached)
 
-    def list(self) -> list[CredentialStatus]:
-        items = [self._status(c) for c in self.store.all()]
+    @staticmethod
+    def _sorted(items: list[CredentialStatus]) -> list[CredentialStatus]:
         far = datetime.max.replace(tzinfo=UTC)
 
         def key(item: CredentialStatus) -> tuple[int, datetime, str]:
@@ -199,6 +239,79 @@ class MechaService:
             return (_GROUP_ORDER[item.result.overall], expires, item.credential.label.lower())
 
         return sorted(items, key=key)
+
+    def list(self) -> list[CredentialStatus]:
+        return self._sorted([self._status(c) for c in self.store.all()])
+
+    # --- check ----------------------------------------------------------------------
+    def _settings(self) -> HttpSettings:
+        h = self.config.http
+        return HttpSettings(h.timeout_seconds, h.retries, h.backoff_seconds)
+
+    def _semaphore(self, provider: ProviderId) -> asyncio.Semaphore:
+        if provider not in self._per_provider:
+            self._per_provider[provider] = asyncio.Semaphore(self.config.scheduler.per_provider)
+        return self._per_provider[provider]
+
+    def is_remote(self, cred: Credential) -> bool:
+        return cred.kind in remote_kinds() and get_provider(cred.provider) is not None
+
+    def is_fresh(self, cred: Credential, now: datetime) -> bool:
+        obs = self.store.last_observation(cred.id)
+        window = timedelta(minutes=self.config.scheduler.min_interval_minutes)
+        return obs is not None and now - obs.observed_at < window
+
+    async def _observe(self, cred: Credential, provider: Provider) -> Observation:
+        now = self._now()
+        ctx = ProviderContext(
+            now=now,
+            http=self._settings(),
+            anthropic_version=self.config.providers.anthropic.version,
+        )
+        secret = self.store.secret(cred.id)
+        if secret is None:  # pragma: no cover - only linked files have no secret (phase 4)
+            return Observation(check_status=CheckStatus.failed, observed_at=now)
+        try:
+            async with (
+                self._global,
+                self._semaphore(cred.provider),
+                make_client(provider.allowed_hosts, self._settings()) as http,
+            ):
+                return await provider.check_passive(cred, secret, http, ctx)
+        except Exception as exc:  # a plugin bug must not take the whole batch down
+            log.warning("provider %s failed: %s", cred.provider.value, type(exc).__name__)
+            log.debug("provider failure", exc_info=True)
+            return Observation(
+                check_status=CheckStatus.failed,
+                observed_at=now,
+                error=ProviderError(code="internal", message=type(exc).__name__),
+            )
+        finally:
+            del secret
+
+    async def _check_one(self, cred: Credential, force: bool) -> CredentialStatus:
+        provider = get_provider(cred.provider)
+        if provider is None or not self.is_remote(cred):
+            return self._status(cred)  # OAuth / linked: offline only, never a remote call
+        if not force and self.is_fresh(cred, self._now()):
+            return self._status(cred, cached=True)
+        obs = await self._observe(cred, provider)
+        result = evaluate(cred, obs, self._now(), self.thresholds)
+        self.store.add_result(result, obs)
+        return self._status(cred)
+
+    async def check(
+        self, ids: Sequence[str] = (), *, force: bool = False
+    ) -> builtins.list[CredentialStatus]:
+        """Passive check of ``ids`` (all credentials if empty), respecting concurrency."""
+        creds = [self.get(i).credential for i in ids] if ids else self.store.all()
+        items = await asyncio.gather(*(self._check_one(c, force) for c in creds))
+        return self._sorted(list(items))
+
+    def check_sync(
+        self, ids: Sequence[str] = (), *, force: bool = False
+    ) -> builtins.list[CredentialStatus]:
+        return asyncio.run(self.check(ids, force=force))
 
     def resolve_id(self, id_or_prefix: str) -> str:
         value = id_or_prefix.strip().upper()

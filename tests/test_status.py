@@ -16,6 +16,7 @@ from mecha.core.models import (
     LimitsState,
     Overall,
     ProviderId,
+    Reason,
     Validity,
 )
 from mecha.core.status import (
@@ -30,6 +31,13 @@ from mecha.core.status import (
 NOW = datetime(2026, 11, 4, 12, 0, tzinfo=UTC)
 
 
+NOTES = {
+    "none": (),
+    "amber": (Reason(code="permission_denied", overall=Overall.amber),),
+    "red": (Reason(code="billing_error", overall=Overall.red),),
+}
+
+
 def oracle(
     kind: CredentialKind,
     validity: Validity,
@@ -38,18 +46,21 @@ def oracle(
     limits: LimitsState | None,
     retiring: bool,
     check: CheckStatus,
+    notes: str,
 ) -> Overall:
     """Independent statement of the spec rules, in priority order."""
     is_red = (
         validity in (Validity.invalid, Validity.revoked, Validity.blocked)
         or funds == FundsState.empty
         or expiry == ExpiryState.expired
+        or notes == "red"
     )
     is_amber = (
         expiry == ExpiryState.soon
         or funds in (FundsState.low, FundsState.capped)
         or limits == LimitsState.throttled
         or retiring
+        or notes == "amber"
     )
     if is_red:
         return Overall.red
@@ -73,18 +84,19 @@ ROWS = list(
         [None, *LimitsState],
         [False, True],
         list(CheckStatus),
+        list(NOTES),
     )
 )
 
 
 def test_truth_table_is_complete() -> None:
-    assert len(ROWS) == 5 * 6 * 6 * 5 * 4 * 2 * 3
+    assert len(ROWS) == 5 * 6 * 6 * 5 * 4 * 2 * 3 * 3
 
 
 @pytest.mark.parametrize("chunk", range(10))
 def test_truth_table(chunk: int) -> None:
     for row in ROWS[chunk::10]:
-        kind, validity, funds, expiry, limits, retiring, check = row
+        kind, validity, funds, expiry, limits, retiring, check, notes = row
         overall, reasons = compute_overall(
             kind=kind,
             validity=validity,
@@ -93,12 +105,21 @@ def test_truth_table(chunk: int) -> None:
             limits=limits,
             retiring=retiring,
             check_status=check,
+            notes=NOTES[notes],
         )
         assert overall == oracle(*row), row
         assert reasons, row
         # At least one reason explains the colour; red cards also list their amber reasons.
         assert any(r.overall == overall for r in reasons), row
         assert all(SEVERITY[r.overall] <= SEVERITY[overall] for r in reasons), row
+        got = {r.code for r in reasons}
+        # A 401 on a key whose known expiry passed reads as expired, not invalid.
+        if validity is Validity.invalid and expiry is ExpiryState.expired:
+            assert "validity_invalid" not in got, row
+            assert "expired" in got, row
+        # "billing problem" replaces "no funds" rather than adding to it.
+        if notes == "red" and funds is FundsState.empty:
+            assert "funds_empty" not in got, row
 
 
 def test_grey_reasons_distinguish_not_checked_from_failed() -> None:
@@ -237,3 +258,32 @@ def test_exit_codes(overalls: list[Overall], code: int) -> None:
 def test_worst() -> None:
     assert worst([Overall.green, Overall.local, Overall.grey]) is Overall.grey
     assert worst([]) is None
+
+
+def test_api_expiry_keeps_ticking_between_checks() -> None:
+    from mecha.core.models import Expiry
+    from mecha.core.status import Observation, evaluate
+
+    obs = Observation(
+        check_status=CheckStatus.ok,
+        observed_at=NOW,
+        validity=Validity.valid,
+        expiry=Expiry(state=ExpiryState.scheduled, expires_at=NOW + timedelta(days=20)),
+    )
+    cred = _cred()
+    assert evaluate(cred, obs, NOW).overall is Overall.green
+    later = evaluate(cred, obs, NOW + timedelta(days=10))
+    assert later.overall is Overall.amber
+    assert later.expiry.source == "api"
+    gone = evaluate(cred, obs, NOW + timedelta(days=21))
+    assert gone.overall is Overall.red
+
+
+def test_failed_check_keeps_offline_expiry_but_drops_remote_data() -> None:
+    from mecha.core.status import Observation, evaluate
+
+    obs = Observation(check_status=CheckStatus.failed, observed_at=NOW)
+    r = evaluate(_cred(manual_expires_at=NOW + timedelta(days=2)), obs, NOW)
+    assert r.overall is Overall.amber
+    assert r.validity.value is Validity.unknown
+    assert r.account == {}

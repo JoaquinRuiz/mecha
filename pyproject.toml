@@ -68,6 +68,7 @@ select = ["E", "W", "F", "I", "B", "UP", "S", "SIM", "RUF", "PT"]
 python_version = "3.12"
 files = ["src/mecha"]
 strict = true
+plugins = ["pydantic.mypy"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -4,13 +4,19 @@ Priority: red > amber > grey > green. ``local`` is the neutral state of OAuth cr
 (validity ``not_applicable``): it applies only when nothing is red or amber and never mixes
 with grey. Offline conditions (retiring key type, known expiry dates) are always evaluated,
 even when the remote check could not run.
+
+A remote check produces an :class:`Observation`; :func:`evaluate` merges it with the
+credential's offline facts *at a given time*, so expiry keeps ticking between checks.
 """
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from decimal import Decimal
+
+from pydantic import BaseModel, Field
 
 from mecha.core.models import (
     CheckResult,
@@ -21,8 +27,12 @@ from mecha.core.models import (
     ExpiryState,
     Funds,
     FundsState,
+    HttpTrace,
+    Limits,
     LimitsState,
+    Mode,
     Overall,
+    ProviderError,
     Reason,
     Signal,
     Source,
@@ -37,12 +47,32 @@ R_CHECK_FAILED = "check_failed"  # «falló la comprobación»
 R_VALIDITY_UNKNOWN = "validity_unknown"
 R_LOCAL_ONLY = "local_only"
 R_VALID = "valid"
+R_BILLING_ERROR = "billing_error"  # «problema de facturación»
+R_PERMISSION_DENIED = "permission_denied"  # «sin permiso»
 
 
 @dataclass(frozen=True)
 class Thresholds:
     soon_days: int = 14
     low_funds_usd: Decimal = Decimal("5")
+
+
+class Observation(BaseModel):
+    """What one remote request taught us. Every field is optional: unknown stays unknown."""
+
+    mode: Mode = "passive"
+    check_status: CheckStatus
+    observed_at: datetime
+    validity: Validity | None = None
+    funds: Funds | None = None
+    funds_source: Source = "api"
+    expiry: Expiry | None = None  # from the provider (e.g. an admin API), not offline facts
+    limits: Limits | None = None
+    account: dict[str, str] = Field(default_factory=dict)
+    account_source: dict[str, Source] = Field(default_factory=dict)
+    notes: list[Reason] = Field(default_factory=list)  # provider-specific reasons
+    http: HttpTrace | None = None
+    error: ProviderError | None = None
 
 
 def expiry_state(expires_at: datetime | None, now: datetime, th: Thresholds) -> ExpiryState:
@@ -64,14 +94,20 @@ def compute_overall(
     limits: LimitsState | None,
     retiring: bool,
     check_status: CheckStatus,
+    notes: Sequence[Reason] = (),
 ) -> tuple[Overall, list[Reason]]:
     red: list[str] = []
-    if validity in RED_VALIDITY:
+    # A 401 on a key whose known expiry has passed is shown as expired, not invalid.
+    if validity in RED_VALIDITY and not (
+        validity is Validity.invalid and expiry is ExpiryState.expired
+    ):
         red.append(f"validity_{validity.value}")
-    if funds is FundsState.empty:
+    # "billing problem" already explains empty funds; don't list both.
+    if funds is FundsState.empty and not any(n.code == R_BILLING_ERROR for n in notes):
         red.append("funds_empty")
     if expiry is ExpiryState.expired:
         red.append("expired")
+    red += [n.code for n in notes if n.overall is Overall.red]
 
     amber: list[str] = []
     if expiry is ExpiryState.soon:
@@ -84,6 +120,7 @@ def compute_overall(
         amber.append("throttled")
     if retiring:
         amber.append("retiring_key_type")
+    amber += [n.code for n in notes if n.overall is Overall.amber]
 
     reasons = [Reason(code=c, overall=Overall.red) for c in red]
     reasons += [Reason(code=c, overall=Overall.amber) for c in amber]
@@ -118,39 +155,104 @@ def known_expiry(cred: Credential) -> tuple[datetime | None, Source]:
     return min(candidates, key=lambda c: c[0])
 
 
-def evaluate_offline(cred: Credential, now: datetime, th: Thresholds | None = None) -> CheckResult:
+def evaluate(
+    cred: Credential,
+    obs: Observation | None,
+    now: datetime,
+    th: Thresholds | None = None,
+) -> CheckResult:
+    """Merge the latest observation (if any) with offline facts, evaluated at ``now``."""
     th = th or Thresholds()
     oauth = cred.kind.is_oauth
-    validity = Validity.not_applicable if oauth else Validity.unknown
-    funds = FundsState.not_applicable if oauth else FundsState.unknown
-    expires_at, expiry_source = known_expiry(cred)
-    expiry = expiry_state(expires_at, now, th)
+    if oauth:
+        obs = None  # principle 4: OAuth credentials are never checked remotely
+
+    # Validity and funds come from the observation; offline they are unknown / n.a.
+    v_source: Source
+    f_source: Source
+    if oauth:
+        validity, v_source, v_at = Validity.not_applicable, "inferred", now
+        funds, f_source, f_at = Funds(state=FundsState.not_applicable), "inferred", now
+    elif obs is None or obs.check_status is not CheckStatus.ok:
+        validity, v_source, v_at = Validity.unknown, "inferred", now
+        funds, f_source, f_at = Funds(state=FundsState.unknown), "inferred", now
+    else:
+        validity, v_source, v_at = obs.validity or Validity.unknown, "api", obs.observed_at
+        funds = obs.funds or Funds(state=FundsState.unknown)
+        f_source, f_at = (obs.funds_source if obs.funds else "inferred"), obs.observed_at
+
+    # Expiry: a date reported by the provider wins over offline facts; "none" (never
+    # expires) only comes from the provider. The state is always recomputed at `now`.
+    api_expiry = obs.expiry if obs and obs.check_status is CheckStatus.ok else None
+    offline_at, offline_source = known_expiry(cred)
+    expires_at: datetime | None
+    e_source: Source
+    if api_expiry and api_expiry.expires_at is not None:
+        expires_at, e_source = api_expiry.expires_at, "api"
+        if offline_at is not None and offline_at < expires_at:
+            expires_at, e_source = offline_at, offline_source
+    else:
+        expires_at, e_source = offline_at, offline_source
+    e_state = expiry_state(expires_at, now, th)
+    if e_state is ExpiryState.unknown and api_expiry and api_expiry.state is ExpiryState.none:
+        e_state, e_source = ExpiryState.none, "api"
+    elif e_state is ExpiryState.unknown and api_expiry and api_expiry.state is ExpiryState.expired:
+        e_state, e_source = ExpiryState.expired, "api"
+
+    check_status = obs.check_status if obs else CheckStatus.not_checked
+    ok = obs is not None and obs.check_status is CheckStatus.ok
+    limits = obs.limits if ok and obs else None
+    notes = obs.notes if ok and obs else []
 
     overall, reasons = compute_overall(
         kind=cred.kind,
         validity=validity,
-        funds=funds,
-        expiry=expiry,
-        limits=None,
+        funds=funds.state,
+        expiry=e_state,
+        limits=limits.state if limits else None,
         retiring=cred.retiring,
-        check_status=CheckStatus.not_checked,
+        check_status=check_status,
+        notes=notes,
     )
+    checked_at = obs.observed_at if obs else now
     return CheckResult(
         credential_id=cred.id,
-        checked_at=now,
-        mode="offline",
-        check_status=CheckStatus.not_checked,
+        checked_at=checked_at,
+        mode=obs.mode if obs else "offline",
+        check_status=check_status,
         overall=overall,
         reasons=reasons,
-        validity=Signal[Validity](value=validity, source="inferred", observed_at=now),
-        funds=Signal[Funds](value=Funds(state=funds), source="inferred", observed_at=now),
+        validity=Signal[Validity](value=validity, source=v_source, observed_at=v_at),
+        funds=Signal[Funds](value=funds, source=f_source, observed_at=f_at),
         expiry=Signal[Expiry](
-            value=Expiry(state=expiry, expires_at=expires_at),
-            source=expiry_source,
-            observed_at=now,
+            value=Expiry(state=e_state, expires_at=expires_at),
+            source=e_source,
+            observed_at=obs.observed_at if obs and e_source == "api" else now,
         ),
-        limits=None,
+        limits=(
+            Signal[Limits](value=limits, source="header", observed_at=obs.observed_at)
+            if limits and obs
+            else None
+        ),
+        account=_account(obs),
+        http=obs.http if obs else None,
+        error=obs.error if obs else None,
     )
+
+
+def _account(obs: Observation | None) -> dict[str, Signal[str]]:
+    if obs is None or obs.check_status is not CheckStatus.ok:
+        return {}
+    return {
+        k: Signal[str](
+            value=v, source=obs.account_source.get(k, "api"), observed_at=obs.observed_at
+        )
+        for k, v in obs.account.items()
+    }
+
+
+def evaluate_offline(cred: Credential, now: datetime, th: Thresholds | None = None) -> CheckResult:
+    return evaluate(cred, None, now, th)
 
 
 def worst(overalls: list[Overall]) -> Overall | None:
@@ -158,10 +260,16 @@ def worst(overalls: list[Overall]) -> Overall | None:
     return next((o for o in order if o in overalls), None)
 
 
-def exit_code_for(overalls: list[Overall]) -> int:
-    """CLI contract: 0 green/grey/local, 1 any amber, 2 any red (3 = Mecha failure)."""
+def exit_code_for(overalls: list[Overall], *, strict: bool = False) -> int:
+    """Nagios contract: 0 OK (green/grey/local), 1 WARNING (amber), 2 CRITICAL (red).
+
+    With ``strict``, grey ("could not check") is UNKNOWN (3). Red still wins; grey beats amber
+    because "I could not check" must not be reported as a mere warning.
+    """
     if Overall.red in overalls:
         return 2
+    if strict and Overall.grey in overalls:
+        return 3
     if Overall.amber in overalls:
         return 1
     return 0

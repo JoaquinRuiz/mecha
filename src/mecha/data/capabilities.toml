@@ -1,0 +1,47 @@
+# Capability matrix (SPEC.md, "Capacidades por proveedor"). This file is the contract:
+# GET /api/providers (phase 3) and the UI texts come from it, and the UI never promises
+# anything that is not here. `passive` lists the free endpoint used per credential kind;
+# tests check it against each plugin.
+#
+# Values for validate/funds/expiry: "yes", "no", "admin_key", "management_key", "error_only".
+
+[providers.anthropic]
+name = "Anthropic"
+validate = "yes"
+funds = "error_only"        # no endpoint; shows up when generating (active probe, phase 4)
+expiry = "admin_key"        # expires_at via the Admin API
+active_probe = "POST /v1/messages, max_tokens 1"
+passive = { api_key = "GET /v1/models", admin_key = "GET /v1/organizations/api_keys" }
+
+[providers.openai]
+name = "OpenAI"
+validate = "yes"
+funds = "error_only"        # spend via Costs API with an admin key (phase 4)
+expiry = "admin_key"
+active_probe = "POST /v1/embeddings, one word"
+passive = { api_key = "GET /v1/models", admin_key = "GET /v1/organization/admin_api_keys" }
+
+[providers.gemini]
+name = "Google Gemini"
+validate = "yes"
+funds = "error_only"        # prepay has no read API; 402 when depleted
+expiry = "no"
+active_probe = "generateContent, maxOutputTokens 1"
+passive = { api_key = "GET /v1beta/models" }
+
+[providers.xai]
+name = "xAI"
+validate = "yes"
+funds = "management_key"    # prepaid balance via the management API
+expiry = "management_key"   # expireTime via the management API
+active_probe = "POST /v1/chat/completions, minimal"
+passive = { api_key = "GET /v1/api-key", management_key = "GET /auth/management-keys/validation" }
+
+[providers.openrouter]
+name = "OpenRouter"
+validate = "yes"
+funds = "yes"               # limit_remaining with the key itself
+expiry = "yes"              # expires_at with the key itself
+active_probe = "not needed"
+passive = { api_key = "GET /api/v1/key" }
+phase = 4

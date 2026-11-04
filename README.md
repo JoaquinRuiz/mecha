@@ -19,11 +19,14 @@ Mecha is a local-first dashboard (web + CLI) that tells you at a glance how much
 mecha add --label "Prod Anthropic" --tag prod   # hidden prompt; or pipe: echo "$KEY" | mecha add
 mecha ls                                        # table; --json for scripts
 mecha detect < key.txt                          # classify offline, store nothing
+mecha check                                     # free passive check of every key; --json, --strict, --force
 mecha rm 01J9ABCD --yes
 mecha passphrase set                            # recovery passphrase for the store
 ```
 
-Secrets are never accepted as command-line arguments. `mecha ls` (and `mecha check`, coming next) follow the Nagios convention: `0` all green, grey or local only, `1` some amber, `2` some red, `3` unknown. Any error in those commands, including a misspelt option, exits `3`, never `2`.
+Secrets are never accepted as command-line arguments. `mecha ls` and `mecha check` follow the Nagios convention: `0` all green, grey or local only, `1` some amber, `2` some red, `3` unknown. Any error in those commands, including a misspelt option, exits `3`, never `2`. With `--strict`, a grey result (could not check) exits `3`.
+
+Checks only use each provider's free endpoint (no tokens are spent) and only reach that provider's official hosts. A result younger than 5 minutes is reused (shown as cached); `--force` checks again. `mecha serve` also re-checks every 6 hours. Settings live in `config.toml` in the data directory.
 
 The store key lives in the system keyring. Without a keyring (headless Linux, cron), set `MECHA_PASSPHRASE_FILE` to a `0600` file holding the passphrase (or `MECHA_PASSPHRASE`). `MECHA_HOME` overrides the data directory.
 
