@@ -475,8 +475,8 @@ Modelos, detección, decodificación JWT, almacén cifrado, parte offline del mo
 
 Plugins de Anthropic, OpenAI, Gemini y xAI con su endpoint gratuito, motor de estados, historial y planificador.
 
-- [ ] Cada fila del mapa de errores tiene una fixture que produce el estado esperado.
-- [ ] `mecha check --json` devuelve un esquema estable y los códigos de salida definidos.
+- [x] Cada fila del mapa de errores tiene una fixture que produce el estado esperado.
+- [x] `mecha check --json` devuelve un esquema estable y los códigos de salida definidos.
 
 ### Fase 3 · Dashboard
 
