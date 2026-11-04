@@ -451,8 +451,8 @@ Seis fases; cada una se cierra con los tests en verde y sus criterios cumplidos 
 
 Modelos, detección, decodificación JWT, almacén cifrado, parte offline del motor de estados (sin red: `AIza` en ámbar, caducidad manual o de JWT, OAuth como `local`, el resto gris «sin comprobar»), capa de servicio en `core` (add, list, detect, remove; la Fase 3 solo la envuelve) y CLI con `add`, `ls`, `detect` y `rm`. `ls` ya usa los códigos de salida.
 
-- [ ] Cada patrón de la tabla de detección tiene test positivo y negativo.
-- [ ] Una clave canario no aparece en claro en el SQLite ni en los logs.
+- [x] Cada patrón de la tabla de detección tiene test positivo y negativo.
+- [x] Una clave canario no aparece en claro en el SQLite ni en los logs.
 
 ### Fase 2 · Comprobaciones pasivas
 
