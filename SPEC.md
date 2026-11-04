@@ -79,7 +79,7 @@ Los umbrales se configuran globalmente y por credencial. Cada valor viaja como s
 
 ## Detección offline del tipo de credencial
 
-Al pegar un secreto, Mecha lo clasifica sin red por prefijo, forma JWT o estructura JSON, y esa clasificación decide qué comprobaciones son posibles. Los patrones viven en un fichero de datos (`detect_patterns.toml`), así un formato nuevo se añade sin tocar código.
+Al pegar un secreto, Mecha lo clasifica sin red por prefijo, forma JWT o estructura JSON, y esa clasificación decide qué comprobaciones son posibles. Los patrones viven en un fichero de datos (`detect_patterns.toml`), así un formato nuevo se añade sin tocar código. Cada patrón lleva `verified` (prefijo confirmado en la documentación oficial) y su referencia; el estado de cada uno está en `docs/providers.md`.
 
 | Patrón | Proveedor | Tipo | Qué implica |
 | --- | --- | --- | --- |
@@ -133,7 +133,7 @@ Solo xAI (con clave de gestión) y OpenRouter devuelven saldo por API; Anthropic
 - Base `https://api.anthropic.com`, autenticación con `x-api-key` (la API también acepta `Authorization: Bearer`). La cabecera `anthropic-version` va en configuración: por defecto `2026-10-21`, publicada el 21 de octubre de 2026; `2023-06-01` sigue funcionando. La versión nueva rechaza `temperature`, `top_p` y `top_k`, que la sonda no envía.
 - **Pasiva:** `GET /v1/models`. 200 es válida (guardar nº de modelos y la cabecera `anthropic-organization-id` si viene), 401 inválida, 403 sin permiso. No informa de saldo.
 - **Activa:** `POST /v1/messages` con el modelo más barato que liste `/v1/models` (configurable) y `max_tokens: 1`. Un 400 cuyo mensaje contenga «credit balance» o «insufficient credits» es saldo `empty`. Leer `anthropic-ratelimit-requests-*`, `anthropic-ratelimit-input-tokens-*` y `anthropic-ratelimit-output-tokens-*` (limit, remaining, reset). Verificar si `POST /v1/messages/count_tokens`, que es gratuito, devuelve el mismo error de saldo; si lo hace, pasa a ser la sonda por defecto.
-- **Admin key:** `GET /v1/organizations/api_keys`, paginado con `after_id` y `limit` hasta 1000. Cada clave trae `status` (`active`, `inactive`, `archived`, `expired`), `expires_at`, `partial_key_hint`, `scope` (con `2026-10-21` sustituye a `workspace_id`) y `created_by`. Mecha cruza `partial_key_hint` con las claves guardadas para rellenar estado y caducidad.
+- **Admin key:** `GET /v1/organizations/api_keys`, paginado con `after_id` y `limit` hasta 1000. Cada clave trae `status` (`active`, `inactive`, `archived`, `expired`), `expires_at`, `partial_key_hint`, `scope` (con `2026-10-21` sustituye a `workspace_id`) y `created_by`. Mecha cruza `partial_key_hint` con las claves guardadas para rellenar estado y caducidad: genera la pista en el formato de Anthropic (`sk-ant-api03-R2D...igAA`, tres puntos ASCII) a partir del secreto descifrado en memoria y la compara con la de la API; nunca compara con su propio `redacted`.
 - **OAuth `sk-ant-oat01-`:** sin llamadas remotas (principio 4).
 - **Saldo:** no hay endpoint; se admite un presupuesto manual.
 
@@ -143,7 +143,7 @@ Solo xAI (con clave de gestión) y OpenRouter devuelven saldo por API; Anthropic
 - **Pasiva:** `GET /v1/models`. 200 es válida, 401 (`invalid_api_key`) inválida (verificar si una clave caducada devuelve un código propio). Este endpoint no comprueba la cuota, así que no detecta falta de saldo.
 - **Activa:** `POST /v1/embeddings` con el modelo de embeddings más barato disponible y una sola palabra. 429 `insufficient_quota` es saldo `empty`; 429 `rate_limit_exceeded` es `throttled`; un 403 por permisos del proyecto es «sonda no permitida» y no invalida la clave. Leer `x-ratelimit-limit-requests`, `x-ratelimit-remaining-requests`, `x-ratelimit-limit-tokens`, `x-ratelimit-remaining-tokens` y `x-ratelimit-reset-*`.
 - **Caducidad:** desde el 10 de septiembre de 2026 las project keys pueden caducar y la organización puede imponer una vida máxima. Solo es visible con admin key.
-- **Admin key (`sk-admin-`):** `GET /v1/organization/projects` y, por proyecto, `GET /v1/organization/projects/{project_id}/api_keys`, que devuelve `expires_at` (null si no caduca), `last_used_at`, `redacted_value`, `owner` y `owner_project_access`. `GET /v1/organization/admin_api_keys` da lo mismo para las admin keys. Mecha cruza `redacted_value` con las claves guardadas.
+- **Admin key (`sk-admin-`):** `GET /v1/organization/projects` y, por proyecto, `GET /v1/organization/projects/{project_id}/api_keys`, que devuelve `expires_at` (null si no caduca), `last_used_at`, `redacted_value`, `owner` y `owner_project_access`. `GET /v1/organization/admin_api_keys` da lo mismo para las admin keys. Mecha cruza `redacted_value` con las claves guardadas generando, a partir del secreto descifrado, la pista en el formato de OpenAI (la doc muestra `sk-abc...def`); nunca compara con su propio `redacted`.
 - **Saldo:** no hay endpoint; el soporte de OpenAI lo confirmó en septiembre de 2026 y remite a la Costs API. Con admin key y un presupuesto manual (importe y fecha de compra), Mecha estima el saldo restando `GET /v1/organization/costs` desde esa fecha, y lo marca como `inferred`.
 - **OAuth de ChatGPT (Codex):** solo JWT local.
 
@@ -286,6 +286,10 @@ class Credential(BaseModel):
     manual_budget: Budget | None = None  # importe, moneda y fecha de compra
     active_probe: bool = False
     created_at: datetime
+    pattern_id: str | None = None    # patrón de detect_patterns.toml que la clasificó
+    token_expires_at: datetime | None = None    # claim exp (JWT), derivado sin red al dar de alta
+    subscription_until: datetime | None = None  # chatgpt_subscription_active_until (JWT)
+    retiring: bool = False           # tipo de clave en retirada (p. ej. Gemini AIza)
 
 class Signal(BaseModel, Generic[T]):
     value: T
@@ -296,6 +300,8 @@ class CheckResult(BaseModel):
     credential_id: str
     checked_at: datetime
     mode: Literal["offline", "passive", "active", "enrich"]
+    check_status: Literal["not_checked", "failed", "ok"]  # «sin comprobar» ≠ «falló la comprobación»
+    reasons: list[Reason]            # códigos que explican el color (expires_soon, retiring_key_type…)
     overall: Literal["green", "amber", "red", "grey", "local"]  # prioridad red > amber > grey > green; local solo OAuth
     validity: Signal[Validity]       # incluye not_applicable para OAuth
     funds: Signal[Funds]             # estado, importe y moneda
@@ -330,13 +336,19 @@ Los errores tienen la forma `{code, message}` y nunca incluyen el secreto ni cab
 
 Mecha guarda secretos de alto valor, así que el diseño asume que cualquier web abierta en el navegador puede intentar hablar con él.
 
-- **Cifrado en reposo.** Cada secreto se cifra con AES-256-GCM. La clave maestra vive en el llavero del sistema vía `keyring`; si no hay llavero (Linux sin escritorio), se deriva de una frase de paso con scrypt o Argon2id y se pide al arrancar.
-- **Disco.** La base de datos está en el directorio de datos de usuario (platformdirs) con permisos 0600. Ningún secreto queda en claro en disco, logs ni historial.
+- **Cifrado en reposo.** Cada secreto se cifra con AES-256-GCM (nonce aleatorio, el `id` de la credencial como dato asociado). Todo cuelga de una **clave de datos** aleatoria de 32 bytes; de ella se derivan con HKDF una subclave de cifrado y otra para el HMAC de la huella.
+  - **Llavero:** guarda la clave de datos tal cual, en una entrada indexada por el id de almacén guardado en la base, para que dos `MECHA_HOME` no compartan entrada.
+  - **Frase de paso (opcional, también de recuperación):** si se define, la base guarda además la clave de datos cifrada con una clave derivada de la frase por Argon2id (scrypt si Argon2id no está disponible al crear). En metadatos van el KDF, sus parámetros y el salt; al abrir nunca se cambia de KDF en silencio, y si el KDF guardado no está disponible es un error claro.
+  - **Orden al abrir:** llavero → `MECHA_PASSPHRASE` o `MECHA_PASSPHRASE_FILE` (fichero 0600, recomendado para cron) → prompt si hay TTY → si no, salida 3 con un mensaje claro. Si la frase abre el almacén y el llavero no tenía la entrada, se restaura en el llavero.
+  - **Verificador:** un valor fijo cifrado con la clave de datos detecta una clave o frase incorrecta antes de tocar filas.
+  - **Nunca encima:** si la base existe y no hay clave, es un error; nunca se genera una clave nueva sobre datos existentes. `mecha passphrase set|remove` gestiona la frase; `remove` solo se permite si el llavero tiene la clave.
+- **Disco.** La base de datos está en el directorio de datos de usuario (platformdirs, o `MECHA_HOME`) con permisos 0600 y directorio 0700. El proceso fija `umask 077` antes de abrir SQLite para que `-wal`, `-shm` y `-journal` nazcan con 0600; `secure_delete` está activo. En Windows los permisos POSIX son lo mejor posible. Ningún secreto queda en claro en disco, logs ni historial.
 - **Solo localhost.** El servidor escucha en 127.0.0.1 y rechaza cualquier cabecera `Host` distinta de `127.0.0.1:<puerto>` o `localhost:<puerto>`, contra DNS rebinding.
 - **Token de sesión.** Cada arranque genera un token aleatorio y la CLI abre `http://127.0.0.1:7878/#t=<token>`. El frontend lo lee del fragmento, lo borra de la barra de direcciones y lo envía en `Authorization`. Sin token, 401; sin CORS.
 - **CSP estricta.** El HTML servido no carga nada de terceros: fuentes e iconos van empaquetados.
 - **Sin vuelta atrás.** Tras el alta, el frontend solo ve `redacted` y `fingerprint`. En la v1 no existe «mostrar clave».
-- **Logs.** Un filtro de logging sustituye cualquier coincidencia de los patrones de detección por su forma redactada, y httpx nunca registra cabeceras.
+- **Logs.** Un filtro de logging (instalado como factoría de `LogRecord`, cubre todos los loggers y el texto de las excepciones) sustituye cualquier coincidencia de los patrones de detección por su forma redactada, y httpx nunca registra cabeceras.
+- **Trazas.** Typer va con `pretty_exceptions_show_locals=False` y sin trazas de Rich: mostrarían las variables locales, secreto incluido. Los errores inesperados de la CLI se imprimen redactados y salen con 3.
 - **Salidas controladas.** Cada plugin declara su lista de hosts permitidos y el cliente HTTP rechaza cualquier otro destino.
 - **Ficheros vinculados.** Solo lectura; los tokens se leen en cada comprobación y nunca se copian.
 - **Copias.** `mecha export` produce un fichero cifrado con frase de paso; no hay export en claro.
@@ -394,7 +406,7 @@ La CLI comparte núcleo con la web y sirve para cron, CI y para quien vive en la
 | Comando | Qué hace |
 | --- | --- |
 | `mecha` o `mecha serve` | Arranca el servidor y abre el navegador; `--port`, `--no-open`, `--demo` |
-| `mecha add` | Alta interactiva con entrada oculta; `--label`, `--tag` |
+| `mecha add` | Alta con entrada oculta o por stdin (el secreto nunca va como argumento: acabaría en el historial y en la lista de procesos); `--label`, `--tag`, `--notes`, `--provider`, `--kind`, `--expires`. La entrada se normaliza: espacios y saltos de línea, comillas, `NOMBRE=` y `Bearer` delante |
 | `mecha ls` | Tabla con semáforo, tipo, caducidad, saldo y última comprobación |
 | `mecha check [ID…]` | Comprueba; `--active` para sondas, `--json` para scripts, `--strict` para tratar el gris como fallo |
 | `mecha detect` | Clasifica un secreto leído de stdin, sin red ni guardado |
@@ -402,6 +414,7 @@ La CLI comparte núcleo con la web y sirve para cron, CI y para quien vive en la
 | `mecha link <herramienta>` | Vincula el fichero de sesión de `codex`, `claude-code` o `gemini-cli`; `--path` para rutas propias |
 | `mecha rm ID` | Borra una credencial y su historial |
 | `mecha export` y `mecha restore` | Copia cifrada con frase de paso |
+| `mecha passphrase set` / `remove` | Define, cambia o quita la frase de paso de recuperación del almacén |
 
 `check` y `ls` salen con 0 si todo está verde, gris o solo local, 1 si hay algún ámbar, 2 si hay algún rojo y 3 si falla Mecha.
 
@@ -436,7 +449,7 @@ Seis fases; cada una se cierra con los tests en verde y sus criterios cumplidos 
 
 ### Fase 1 · Núcleo offline
 
-Modelos, detección, decodificación JWT, almacén cifrado y CLI con `add`, `ls`, `detect` y `rm`.
+Modelos, detección, decodificación JWT, almacén cifrado, parte offline del motor de estados (sin red: `AIza` en ámbar, caducidad manual o de JWT, OAuth como `local`, el resto gris «sin comprobar»), capa de servicio en `core` (add, list, detect, remove; la Fase 3 solo la envuelve) y CLI con `add`, `ls`, `detect` y `rm`. `ls` ya usa los códigos de salida.
 
 - [ ] Cada patrón de la tabla de detección tiene test positivo y negativo.
 - [ ] Una clave canario no aparece en claro en el SQLite ni en los logs.
