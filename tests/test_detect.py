@@ -96,6 +96,7 @@ def test_positive(pattern_id: str) -> None:
     assert det.provider is pattern.provider
     assert det.kind is pattern.kind
     assert det.verified is pattern.verified
+    assert "unverified_pattern" not in det.warnings  # `verified` is a field, not a warning
     assert secret not in det.model_dump_json()
 
 

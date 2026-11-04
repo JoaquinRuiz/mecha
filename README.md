@@ -23,7 +23,7 @@ mecha rm 01J9ABCD --yes
 mecha passphrase set                            # recovery passphrase for the store
 ```
 
-Secrets are never accepted as command-line arguments. `mecha ls` exits with `0` (all green, grey or local only), `1` (some amber), `2` (some red) or `3` (Mecha failed).
+Secrets are never accepted as command-line arguments. `mecha ls` (and `mecha check`, coming next) follow the Nagios convention: `0` all green, grey or local only, `1` some amber, `2` some red, `3` unknown. Any error in those commands, including a misspelt option, exits `3`, never `2`.
 
 The store key lives in the system keyring. Without a keyring (headless Linux, cron), set `MECHA_PASSPHRASE_FILE` to a `0600` file holding the passphrase (or `MECHA_PASSPHRASE`). `MECHA_HOME` overrides the data directory.
 

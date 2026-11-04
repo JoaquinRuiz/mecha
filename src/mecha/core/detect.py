@@ -22,7 +22,6 @@ W_REFRESH_TOKEN = "refresh_token_not_stored"  # noqa: S105 - a warning code
 W_RETIRING = "retiring_key_type"
 W_SESSION_FILE = "session_file_use_link"
 W_UNKNOWN = "unknown_format"
-W_UNVERIFIED = "unverified_pattern"
 W_JWT_UNVERIFIED = "jwt_unverified"
 W_JWT_UNKNOWN_ISSUER = "jwt_unknown_issuer"
 W_MALFORMED_JWT = "malformed_jwt"
@@ -81,9 +80,9 @@ def detect(raw: str) -> Detection:
     for pattern in load_patterns():
         if not pattern.matches(secret):
             continue
+        # `verified` is a field, not a warning: unverified formats (e.g. Gemini AQ./AIza) are
+        # everyday keys, and a warning on every add would teach users to ignore warnings.
         warnings: list[str] = []
-        if not pattern.verified:
-            warnings.append(W_UNVERIFIED)
         if pattern.ambiguous:
             warnings.append(W_AMBIGUOUS)
         if not pattern.storable:

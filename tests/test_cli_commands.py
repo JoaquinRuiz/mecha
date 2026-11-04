@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+from pathlib import Path
 
 import keyring
 import pytest
@@ -9,7 +10,7 @@ from typer.testing import CliRunner
 
 from mecha.cli import app
 from mecha.core.paths import db_path
-from tests.fakes import body, fake, fake_aiza
+from tests.fakes import body, fake, fake_aiza, fake_aq
 from tests.memkeyring import NoKeyring
 
 runner = CliRunner()
@@ -135,3 +136,69 @@ def test_unknown_format_flags() -> None:
 def test_typer_never_shows_locals() -> None:
     assert app.pretty_exceptions_show_locals is False
     assert app.pretty_exceptions_enable is False
+
+
+# --- Nagios exit codes for ls/check (0 OK, 1 WARNING, 2 CRITICAL, 3 UNKNOWN) ---------------
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["ls", "--josn"],  # misspelt option
+        ["ls", "unexpected-argument"],
+        ["--bogus", "ls"],  # group-level option error before ls
+        ["--bogus", "check"],
+    ],
+)
+def test_usage_errors_in_ls_and_check_exit_3_not_2(args: list[str]) -> None:
+    code, output = run(*args)
+    assert code == 3, output
+
+
+@pytest.mark.parametrize(
+    "args", [["add", "--bogus"], ["rm"], ["detect", "--bogus"], ["no-such-command"]]
+)
+def test_usage_errors_elsewhere_keep_click_code_2(args: list[str]) -> None:
+    assert run(*args)[0] == 2
+
+
+def test_ls_help_exits_0() -> None:
+    assert run("ls", "--help")[0] == 0
+
+
+def test_any_error_in_ls_exits_3(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from mecha.core.errors import NotFoundError
+    from mecha.core.service import MechaService
+
+    def boom(self: MechaService) -> list[object]:
+        raise NotFoundError("user-facing error whose own exit code is 2")
+
+    monkeypatch.setattr(MechaService, "list", boom)
+    assert run("ls")[0] == 3
+
+
+# --- unverified formats: a quiet tag, never a warning on add ----------------------------
+
+
+def test_add_does_not_warn_about_unverified_formats() -> None:
+    for secret in (fake_aq(), fake_aiza(), fake("sk-proj-", 100)):
+        code, output = run("add", input=secret)
+        assert code == 0, output
+        assert "official docs" not in output
+        assert "unverified" not in output.lower()
+
+
+def test_detect_tags_unverified_format_quietly() -> None:
+    code, output = run("detect", input=fake_aq())
+    assert code == 0
+    assert "(format not in official docs)" in output
+    assert "Note" not in output  # no warning line for it
+    det = json.loads(run("detect", "--json", input=fake_aq())[1])
+    assert det["verified"] is False
+    assert det["warnings"] == []
+
+
+def test_add_still_explains_behaviour_changes() -> None:
+    code, output = run("add", input=fake("sk-ant-ort01-", 95))
+    assert code == 2
+    assert "refresh token" in output

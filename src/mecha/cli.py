@@ -18,12 +18,18 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Annotated, Any
 
-import click
 import typer
 import uvicorn
 from rich.console import Console
 from rich.markup import escape
 from rich.table import Table
+
+# Typer >= 0.27 vendors Click: catching the separate `click` package's exceptions would miss
+# them. tests/test_cli_commands.py pins the resulting exit codes, so a move breaks loudly.
+from typer._click import Context as ClickContext
+from typer._click.exceptions import UsageError
+from typer.core import TyperCommand, TyperGroup
+from typer.exceptions import TyperException
 
 from mecha import __version__
 from mecha.core.detect import Detection
@@ -53,8 +59,49 @@ log = logging.getLogger("mecha")
 console = Console(stderr=True, highlight=False)
 out = Console(highlight=False, soft_wrap=True)
 
+# ls and check follow the Nagios convention (0 OK, 1 WARNING, 2 CRITICAL, 3 UNKNOWN).
+# Click exits usage errors with 2, which a script would read as "something is red", so for
+# those commands usage errors exit with 3 instead.
+NAGIOS_COMMANDS = frozenset({"ls", "check"})
+
+
+class NagiosCommand(TyperCommand):
+    def make_context(
+        self,
+        info_name: str | None,
+        args: list[str],
+        parent: ClickContext | None = None,
+        **extra: Any,
+    ) -> ClickContext:
+        try:
+            return super().make_context(info_name, args, parent=parent, **extra)
+        except UsageError as exc:
+            exc.exit_code = EXIT_FAILURE
+            raise
+
+
+class MechaGroup(TyperGroup):
+    """Root group: a usage error in the group's own options before ``ls``/``check`` is 3 too."""
+
+    def make_context(
+        self,
+        info_name: str | None,
+        args: list[str],
+        parent: ClickContext | None = None,
+        **extra: Any,
+    ) -> ClickContext:
+        command = next((a for a in args if not a.startswith("-")), None)
+        try:
+            return super().make_context(info_name, args, parent=parent, **extra)
+        except UsageError as exc:
+            if command in NAGIOS_COMMANDS:
+                exc.exit_code = EXIT_FAILURE
+            raise
+
+
 app = typer.Typer(
     name="mecha",
+    cls=MechaGroup,
     help="How much fuse is left on your API keys?",
     no_args_is_help=False,
     add_completion=False,
@@ -68,18 +115,18 @@ app.add_typer(passphrase_app, name="passphrase")
 _seen_secrets: list[str] = []
 
 
-def handle_errors[**P, R](fn: Callable[P, R]) -> Callable[P, R]:
+def _error_handler[**P, R](fn: Callable[P, R], *, nagios: bool) -> Callable[P, R]:
     @functools.wraps(fn)
     def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
         try:
             return fn(*args, **kwargs)
-        except (typer.Exit, click.exceptions.Exit, click.ClickException, click.Abort):
+        except (typer.Exit, typer.Abort, TyperException):
             raise
         except MechaError as exc:
             console.print(
                 f"[red]error:[/red] {escape(redact_text(exc.message, tuple(_seen_secrets)))}"
             )
-            raise typer.Exit(exc.exit_code) from None
+            raise typer.Exit(EXIT_FAILURE if nagios else exc.exit_code) from None
         except KeyboardInterrupt:
             raise typer.Exit(130) from None
         except Exception as exc:
@@ -91,6 +138,16 @@ def handle_errors[**P, R](fn: Callable[P, R]) -> Callable[P, R]:
     return wrapper
 
 
+def handle_errors[**P, R](fn: Callable[P, R]) -> Callable[P, R]:
+    """Errors exit with their own code (2 = user error, 3 = Mecha failure)."""
+    return _error_handler(fn, nagios=False)
+
+
+def handle_errors_nagios[**P, R](fn: Callable[P, R]) -> Callable[P, R]:
+    """For ls/check: 0/1/2 mean OK/WARNING/CRITICAL, so *every* error exits 3 (UNKNOWN)."""
+    return _error_handler(fn, nagios=True)
+
+
 def _interactive() -> bool:
     return sys.stdin.isatty() and sys.stderr.isatty()
 
@@ -100,6 +157,16 @@ def _passphrase_prompt(message: str, confirm: bool) -> str:
     if not value:
         raise typer.Exit(EXIT_FAILURE)
     return value
+
+
+def _prompt_provider(default: str | None) -> ProviderId:
+    names = ", ".join(p.value for p in ProviderId)
+    while True:
+        value: str = typer.prompt(f"Provider ({names})", default=default, err=True)
+        try:
+            return ProviderId(value.strip().lower())
+        except ValueError:
+            console.print(f"[yellow]Unknown provider {escape(value)!r}.[/yellow]")
 
 
 def _service() -> MechaService:
@@ -153,7 +220,6 @@ WARNING_TEXT = {
     "retiring_key_type": "key type being retired by the provider",
     "session_file_use_link": "session file: link it by path instead",
     "unknown_format": "unknown format",
-    "unverified_pattern": "format not confirmed in official docs",
     "jwt_unverified": "JWT decoded without signature verification",
     "jwt_unknown_issuer": "unknown JWT issuer",
     "malformed_jwt": "malformed JWT",
@@ -295,7 +361,9 @@ def _print_detection(det: Detection) -> None:
     table.add_row("Type", f"{det.label or '—'} ({det.kind.value if det.kind else 'unknown'})")
     table.add_row("Redacted", det.redacted)
     table.add_row(
-        "Pattern", f"{det.pattern_id or '—'} · {'verified' if det.verified else 'unverified'}"
+        "Pattern",
+        f"{det.pattern_id or '—'}"
+        + ("" if det.verified else " [dim](format not in official docs)[/dim]"),
     )
     table.add_row("Storable", "yes" if det.storable else "no")
     if det.jwt:
@@ -361,18 +429,13 @@ def add(
         except AmbiguousProviderError as exc:
             if not _interactive():
                 raise
-            choice = typer.prompt(
-                "Provider (ambiguous key)",
-                default=exc.candidates[0] if exc.candidates else None,
-                type=click.Choice([p.value for p in ProviderId]),
-                err=True,
-            )
+            choice = _prompt_provider(exc.candidates[0] if exc.candidates else None)
             item = service.add(
                 raw,
                 label=label,
                 tags=tag or [],
                 notes=notes,
-                provider=ProviderId(choice),
+                provider=choice,
                 kind=kind,
                 manual_expires_at=expires_at,
             )
@@ -390,12 +453,15 @@ def add(
     console.print(f"Status: {_status_cell(item)}")
 
 
-@app.command("ls")
-@handle_errors
+@app.command("ls", cls=NagiosCommand)
+@handle_errors_nagios
 def ls_cmd(
     as_json: Annotated[bool, typer.Option("--json", help="Machine-readable output.")] = False,
 ) -> None:
-    """List credentials with their status. Exit code: 0 ok/grey, 1 amber, 2 red, 3 error."""
+    """List credentials with their status.
+
+    Exit code (Nagios): 0 green/grey/local, 1 amber, 2 red, 3 any error (usage errors too).
+    """
     service = _service()
     try:
         items = service.list()

@@ -388,6 +388,7 @@ La pantalla principal responde «¿qué está roto o va a romperse?» en menos d
 **Alta (Dialog)**
 
 - Al pegar el secreto, `/api/detect` muestra al instante proveedor, tipo y qué se podrá saber de él («validez: sí · saldo: no · caducidad: con admin key»).
+- Un formato no confirmado en la documentación oficial (`verified = false`, como `AQ.` o `AIza`) es una etiqueta discreta en `detect`, en `--json` y en el panel de detalle, nunca un aviso en cada alta. El alta solo avisa cuando Mecha cambia lo que hace por el patrón (no guarda un refresh token, pide confirmar el proveedor, remite a `mecha link`).
 - Campos: etiqueta, etiquetas, caducidad o presupuesto manual y casilla de sonda activa con su coste estimado.
 - Pestañas alternativas para importar un `.env` o vincular un fichero de sesión; si existen las rutas por defecto, se ofrecen directamente.
 
@@ -416,7 +417,7 @@ La CLI comparte núcleo con la web y sirve para cron, CI y para quien vive en la
 | `mecha export` y `mecha restore` | Copia cifrada con frase de paso |
 | `mecha passphrase set` / `remove` | Define, cambia o quita la frase de paso de recuperación del almacén |
 
-`check` y `ls` salen con 0 si todo está verde, gris o solo local, 1 si hay algún ámbar, 2 si hay algún rojo y 3 si falla Mecha.
+`check` y `ls` siguen la convención de Nagios: salen con 0 si todo está verde, gris o solo local (OK), 1 si hay algún ámbar (aviso), 2 si hay algún rojo (crítico) y 3 si falla Mecha (desconocido). Cualquier error en esos dos comandos, incluidos los de uso como una opción mal escrita, sale con 3 y nunca con el 2 de Click, que un script leería como «hay rojo». Con `--strict`, `check` trata el gris como fallo y sale con 3. En el resto de comandos, 2 indica un error del usuario (opción inválida, clave duplicada o ambigua) y 3 un fallo de Mecha.
 
 ```bash
 # cada mañana a las 8: aviso si alguna clave está en ámbar o en rojo
