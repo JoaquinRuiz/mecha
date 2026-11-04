@@ -12,7 +12,11 @@ import sys
 import zipfile
 from pathlib import Path
 
-REQUIRED = ("mecha/static/index.html",)
+REQUIRED = (
+    "mecha/static/index.html",
+    "mecha/data/detect_patterns.toml",
+    "mecha/store/migrations/001_initial.sql",
+)
 REQUIRED_PREFIX = "mecha/static/assets/"
 
 

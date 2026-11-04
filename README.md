@@ -13,6 +13,20 @@ Mecha is a local-first dashboard (web + CLI) that tells you at a glance how much
 - **Honest about the unknown.** "Unknown" is a valid state, and every value shows where it came from.
 - **A stored secret is never shown again.** The UI only sees a redacted form and a fingerprint.
 
+## Usage (early)
+
+```bash
+mecha add --label "Prod Anthropic" --tag prod   # hidden prompt; or pipe: echo "$KEY" | mecha add
+mecha ls                                        # table; --json for scripts
+mecha detect < key.txt                          # classify offline, store nothing
+mecha rm 01J9ABCD --yes
+mecha passphrase set                            # recovery passphrase for the store
+```
+
+Secrets are never accepted as command-line arguments. `mecha ls` (and `mecha check`, coming next) follow the Nagios convention: `0` all green, grey or local only, `1` some amber, `2` some red, `3` unknown. Any error in those commands, including a misspelt option, exits `3`, never `2`.
+
+The store key lives in the system keyring. Without a keyring (headless Linux, cron), set `MECHA_PASSPHRASE_FILE` to a `0600` file holding the passphrase (or `MECHA_PASSPHRASE`). `MECHA_HOME` overrides the data directory.
+
 ## Development
 
 Requirements: [uv](https://docs.astral.sh/uv/), Node.js 22+ with [pnpm](https://pnpm.io/) (version pinned in `web/package.json`), [just](https://just.systems/) and, for the pre-commit hook, [gitleaks](https://github.com/gitleaks/gitleaks).

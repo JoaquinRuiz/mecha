@@ -16,11 +16,13 @@ classifiers = [
 dependencies = [
     "fastapi>=0.115",
     "uvicorn>=0.32",
-    "typer>=0.15",
+    "typer>=0.27",
     "rich>=13.9",
     "httpx>=0.28",
     "pydantic>=2.10",
     "platformdirs>=4.3",
+    "cryptography>=44",
+    "keyring>=25",
 ]
 
 [project.scripts]
