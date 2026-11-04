@@ -103,7 +103,7 @@ async def all_401() -> None:
     for provider, name in (
         (ProviderId.anthropic, "invalid_key"),
         (ProviderId.openai, "invalid_key"),
-        (ProviderId.gemini, "invalid_key_401"),
+        (ProviderId.gemini, "unauthenticated"),
     ):
         r = await run(provider, name)
         assert r.validity.value is Validity.invalid, provider
@@ -218,7 +218,7 @@ async def openai_missing_scopes() -> None:
 
 
 async def gemini_invalid() -> None:
-    for name in ("invalid_key_401", "invalid_key_400"):
+    for name in ("unauthenticated", "bad_request_api_key_invalid"):
         r = await run(ProviderId.gemini, name)
         assert r.validity.value is Validity.invalid, name
 
