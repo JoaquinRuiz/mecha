@@ -485,8 +485,8 @@ Plugins de Anthropic, OpenAI, Gemini y xAI con su endpoint gratuito, motor de es
 
 Tarjetas, mecha, filtros, paleta ⌘K, panel de detalle, alta con detección en vivo, SSE y modo demo.
 
-- [ ] Con 20 credenciales demo, la pantalla carga en menos de 1 s y se puede usar solo con teclado.
-- [ ] Ningún estado se comunica solo con color.
+- [x] Con 20 credenciales demo, la pantalla carga en menos de 1 s y se puede usar solo con teclado.
+- [x] Ningún estado se comunica solo con color.
 
 ### Fase 4 · Profundidad
 
