@@ -311,3 +311,11 @@ def test_retry_delay_values(svc: MechaService) -> None:
     assert svc.retry_delay(1) == timedelta(minutes=5)
     assert svc.retry_delay(3) == timedelta(minutes=20)
     assert svc.retry_delay(50) == timedelta(hours=6)
+
+
+def test_backoff_has_a_one_minute_floor(clock: Clock) -> None:
+    config = parse_config("[scheduler]\nmin_interval_minutes = 0\n")
+    svc = MechaService(lambda: open_store(db_path(), None), now=clock, config=config)
+    assert svc.retry_delay(1) == timedelta(minutes=1)  # never "every tick"
+    assert svc.retry_delay(2) == timedelta(minutes=2)
+    assert svc.retry_delay(0) == timedelta(hours=6)
