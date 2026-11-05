@@ -224,16 +224,27 @@ async def gemini_invalid() -> None:
 
 
 async def gemini_restricted() -> None:
+    """Amber when it depends on where the call comes from; red when it fails from anywhere."""
     for name, code in (
         ("ip_restricted", "gemini_ip_restricted"),
         ("referrer_restricted", "gemini_referrer_restricted"),
-        ("service_blocked", "gemini_service_blocked"),
-        ("service_disabled", "gemini_api_disabled"),
+        ("android_app_restricted", "gemini_android_app_restricted"),
+        ("ios_app_restricted", "gemini_ios_app_restricted"),
     ):
         r = await run(ProviderId.gemini, name)
         assert r.overall is Overall.amber, name
         assert code in codes(r), name
         assert "permission_denied" not in codes(r), "the specific reason replaces the generic one"
+    for name, code in (
+        ("service_blocked", "gemini_service_blocked"),
+        ("service_disabled", "gemini_api_disabled"),
+        ("billing_disabled", "gemini_billing_disabled"),  # arrives as 400 FAILED_PRECONDITION
+        ("consumer_suspended", "gemini_project_suspended"),
+    ):
+        r = await run(ProviderId.gemini, name)
+        assert r.overall is Overall.red, name
+        assert code in codes(r), name
+        assert "permission_denied" not in codes(r), name
 
 
 async def gemini_leaked() -> None:

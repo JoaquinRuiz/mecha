@@ -42,6 +42,7 @@ log = logging.getLogger(__name__)
 
 MIN_UNKNOWN_LENGTH = 16
 MIN_ID_PREFIX = 4
+BACKOFF_FLOOR = timedelta(minutes=1)
 
 _GROUP_ORDER = {
     Overall.red: 0,
@@ -273,7 +274,9 @@ class MechaService:
         interval = timedelta(hours=sched.interval_hours)
         if failures <= 0:
             return interval
-        base = timedelta(minutes=sched.min_interval_minutes)
+        # Floor of 1 minute: min_interval_minutes may be 0 (no caching), which must not
+        # turn a failure into a retry on every scheduler tick.
+        base = max(timedelta(minutes=sched.min_interval_minutes), BACKOFF_FLOOR)
         delay: timedelta = base * (2 ** min(failures - 1, 30))
         return min(delay, interval)
 

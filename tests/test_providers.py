@@ -213,3 +213,61 @@ def test_capabilities_match_plugin_endpoints(provider_id: ProviderId) -> None:
         base, plugin_path, _ = plugin.endpoint(kind)
         assert plugin_path == path, (provider_id, kind)
         assert httpx.URL(base).host in plugin.allowed_hosts
+
+
+@pytest.mark.parametrize(
+    "reason", sorted(__import__("mecha.providers.gemini.errors", fromlist=["x"]).CALLER_DEPENDENT)
+)
+def test_gemini_caller_dependent_reasons_are_amber(reason: str) -> None:
+    from mecha.core.models import Overall as O
+    from mecha.providers.gemini.errors import map_error
+
+    body = {
+        "error": {
+            "code": 403,
+            "status": "PERMISSION_DENIED",
+            "message": "x",
+            "details": [{"@type": "type.googleapis.com/google.rpc.ErrorInfo", "reason": reason}],
+        }
+    }
+    finding = map_error(403, body)
+    assert [n.overall for n in finding.notes] == [O.amber], reason
+
+
+@pytest.mark.parametrize(
+    "reason", sorted(__import__("mecha.providers.gemini.errors", fromlist=["x"]).FAILS_EVERYWHERE)
+)
+def test_gemini_fails_everywhere_reasons_are_red(reason: str) -> None:
+    from mecha.core.models import Overall as O
+    from mecha.providers.gemini.errors import map_error
+
+    for status in (400, 403):
+        body = {
+            "error": {
+                "code": status,
+                "status": "x",
+                "message": "x",
+                "details": [
+                    {"@type": "type.googleapis.com/google.rpc.ErrorInfo", "reason": reason}
+                ],
+            }
+        }
+        finding = map_error(status, body)
+        assert [n.overall for n in finding.notes] == [O.red], (reason, status)
+
+
+def test_gemini_reason_texts_exist() -> None:
+    from mecha.cli import REASON_TEXT
+    from mecha.providers.gemini.errors import CALLER_DEPENDENT, FAILS_EVERYWHERE
+
+    for code in {*CALLER_DEPENDENT.values(), *FAILS_EVERYWHERE.values()}:
+        assert code in REASON_TEXT, code
+
+
+def test_gemini_plain_400_is_not_a_permission_problem() -> None:
+    from mecha.providers.gemini.errors import map_error
+
+    finding = map_error(
+        400, {"error": {"code": 400, "status": "INVALID_ARGUMENT", "message": "bad"}}
+    )
+    assert not finding.understood  # unknown 400 stays grey, not amber

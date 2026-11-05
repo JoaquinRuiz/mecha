@@ -21,13 +21,32 @@ INVALID_KEY_REASONS = frozenset({"API_KEY_INVALID"})
 # keys hit by the known account issue: a hint, not a diagnosis.
 R_AQ_HINT = "gemini_aq_rejected"
 DETAIL_ERROR_INFO = "type.googleapis.com/google.rpc.ErrorInfo"
-# 403 ErrorInfo.reason -> a specific amber reason. An IP-restricted key fails from a laptop
-# and works on its server: the card must say so instead of a generic "no permission".
-RESTRICTION_REASONS = {
+# google.api.ErrorReason (googleapis/google/api/error_reason.proto, checked 2026-11-05) ->
+# our reason and severity. Rule: AMBER when it depends on where the call comes from (an
+# IP-restricted key fails from a laptop and works on its server); RED when it fails from
+# anywhere (the key is useless for Gemini). Reasons that cannot occur for an API key
+# listing models (OAuth access tokens, resource creation, MISSING_ORIGIN…) are not mapped
+# and fall back to the generic "no permission".
+CALLER_DEPENDENT: dict[str, str] = {
     "API_KEY_IP_ADDRESS_BLOCKED": "gemini_ip_restricted",
     "API_KEY_HTTP_REFERRER_BLOCKED": "gemini_referrer_restricted",
+    "API_KEY_ANDROID_APP_BLOCKED": "gemini_android_app_restricted",
+    "API_KEY_IOS_APP_BLOCKED": "gemini_ios_app_restricted",
+    "SECURITY_POLICY_VIOLATED": "gemini_vpc_sc_blocked",
+    "ORG_RESTRICTION_VIOLATION": "gemini_org_restriction",
+    "TLS_ORG_POLICY_VIOLATED": "gemini_tls_policy",
+    "TLS_CIPHER_RESTRICTION_VIOLATED": "gemini_tls_policy",
+}
+FAILS_EVERYWHERE: dict[str, str] = {
     "API_KEY_SERVICE_BLOCKED": "gemini_service_blocked",
     "SERVICE_DISABLED": "gemini_api_disabled",
+    "BILLING_DISABLED": "gemini_billing_disabled",
+    "CONSUMER_SUSPENDED": "gemini_project_suspended",
+    "GCP_SUSPENDED": "gemini_project_suspended",
+    "CONSUMER_INVALID": "gemini_project_invalid",
+    "RESOURCE_USAGE_RESTRICTION_VIOLATED": "gemini_org_policy_blocked",
+    "ENDPOINT_USAGE_RESTRICTION_VIOLATED": "gemini_org_policy_blocked",
+    "IAM_PERMISSION_DENIED": "gemini_iam_denied",
 }
 DETAIL_QUOTA_FAILURE = "type.googleapis.com/google.rpc.QuotaFailure"
 
@@ -70,14 +89,17 @@ def map_error(status: int, body: dict[str, Any] | None) -> Finding:
         return Finding(validity=Validity.invalid, error=err)
     if status == 402:
         return Finding(validity=Validity.valid, funds=FundsState.empty, error=err)
-    if status == 403:
-        specific = [
-            RESTRICTION_REASONS[r] for r in sorted(_reasons(details)) if r in RESTRICTION_REASONS
-        ]
-        finding = Finding(error=err)
-        for code in specific or [R_PERMISSION_DENIED]:
-            finding.amber(code)
-        return finding
+    if status in (400, 403):  # billing disabled may also come as 400 FAILED_PRECONDITION
+        reasons = _reasons(details)
+        red = sorted({FAILS_EVERYWHERE[r] for r in reasons if r in FAILS_EVERYWHERE})
+        amber = sorted({CALLER_DEPENDENT[r] for r in reasons if r in CALLER_DEPENDENT})
+        if red or amber or status == 403:
+            finding = Finding(error=err)
+            for code in red:
+                finding.red(code)
+            for code in amber or ([] if red else [R_PERMISSION_DENIED]):
+                finding.amber(code)
+            return finding
     if status == 429:
         if contains(message, *PREPAY_DEPLETED):
             return Finding(validity=Validity.valid, funds=FundsState.empty, error=err)

@@ -1,5 +1,5 @@
 {
-  "source": "https://cloud.google.com/docs/authentication/api-keys (API key restrictions) and the Google API error model (ErrorInfo.reason)",
+  "source": "googleapis google/api/error_reason.proto (google.api.ErrorReason) and the Google API error model",
   "status": 403,
   "headers": {},
   "body": {
