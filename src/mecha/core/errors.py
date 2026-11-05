@@ -65,3 +65,10 @@ class DuplicateCredentialError(MechaError):
 class NotFoundError(MechaError):
     code = "not_found"
     exit_code = 2
+
+
+class DemoReadOnlyError(MechaError):
+    """Demo mode holds no secrets, so adding credentials is disabled."""
+
+    code = "demo_read_only"
+    exit_code = 2

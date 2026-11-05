@@ -32,17 +32,21 @@ from typer.core import TyperCommand, TyperGroup
 from typer.exceptions import TyperException
 
 from mecha import __version__
+from mecha.api.routes import ApiContext
 from mecha.core.config import load_config
+from mecha.core.demo import DemoService
 from mecha.core.detect import Detection
 from mecha.core.errors import AmbiguousProviderError, MechaError
+from mecha.core.events import EventBus
 from mecha.core.logging import install_log_redaction
 from mecha.core.models import CredentialKind, Overall, ProviderId
 from mecha.core.paths import db_path
 from mecha.core.redact import redact_text
 from mecha.core.scheduler import Scheduler
+from mecha.core.serialize import status_json
 from mecha.core.service import CredentialStatus, MechaService
 from mecha.core.status import exit_code_for
-from mecha.server import create_app, generate_token
+from mecha.server import BackgroundJob, create_app, generate_token
 from mecha.store.db import open_store
 
 HOST = "127.0.0.1"
@@ -320,17 +324,7 @@ def _checked(item: CredentialStatus, now: datetime) -> str:
 
 
 def _status_json(item: CredentialStatus) -> dict[str, Any]:
-    known = item.last_known
-    return {
-        "credential": item.credential.model_dump(mode="json"),
-        "result": item.result.model_dump(mode="json"),
-        "cached": item.cached,
-        "last_known": (
-            {"overall": known.overall.value, "checked_at": known.checked_at.isoformat()}
-            if known
-            else None
-        ),
-    }
+    return status_json(item)
 
 
 # --- commands --------------------------------------------------------------------------
@@ -354,6 +348,19 @@ def root(
         serve()
 
 
+class _MechaServer(uvicorn.Server):
+    """Closes the event streams as soon as shutdown starts: uvicorn waits for open
+    connections to finish, and an SSE stream would otherwise keep Ctrl+C hanging."""
+
+    def __init__(self, config: uvicorn.Config, bus: EventBus) -> None:
+        super().__init__(config)
+        self._bus = bus
+
+    def handle_exit(self, sig: int, frame: Any) -> None:
+        self._bus.close()
+        super().handle_exit(sig, frame)
+
+
 def _open_when_ready(server: uvicorn.Server, url: str) -> None:
     for _ in range(200):
         if server.started:
@@ -375,34 +382,42 @@ def serve(
     ] = False,
 ) -> None:
     """Start the local server and open the dashboard."""
-    if demo:
-        console.print("[yellow]Demo mode is not implemented yet (phase 3).[/yellow]")
-
     token = generate_token()
     base = VITE_DEV_URL if dev else f"http://{HOST}:{port}"
     url = f"{base}/#t={token}"
 
-    background = []
-    service = _service()
-    if service.config.scheduler.enabled:
-        try:
-            _ = service.store  # unlock now (keyring / passphrase / prompt), before serving
-        except MechaError as exc:
-            console.print(f"[red]error:[/red] {escape(exc.message)}")
-            raise typer.Exit(EXIT_FAILURE) from None
-        background.append(Scheduler(service).run_forever)
+    background: list[BackgroundJob] = []
+    service: MechaService = DemoService(load_config()) if demo else _service()
+    try:
+        _ = service.store  # unlock now (keyring / passphrase / TTY prompt), never from the browser
+    except MechaError as exc:
+        console.print(f"[red]error:[/red] {escape(exc.message)}")
+        raise typer.Exit(EXIT_FAILURE) from None
+    api = ApiContext(service=service, demo=demo)
+
+    def publish(item: CredentialStatus, done: int, total: int) -> None:
+        api.bus.publish(
+            {"type": "check_progress", "id": item.credential.id, "done": done, "total": total}
+        )
+
+    if demo:
+        console.print("[yellow]Demo mode:[/yellow] fake data, no secrets, no network.")
+    elif service.config.scheduler.enabled:
+        background.append(Scheduler(service, on_result=publish).run_forever)
         hours = service.config.scheduler.interval_hours
         console.print(f"Scheduler: passive checks every {hours:g} h")
 
     config = uvicorn.Config(
-        create_app(token=token, port=port, background=background),
+        create_app(token=token, port=port, background=background, api=api),
         host=HOST,
         port=port,
         log_level="info",
         server_header=False,
         proxy_headers=False,
+        # Backstop: never wait more than a few seconds for open connections on Ctrl+C.
+        timeout_graceful_shutdown=3,
     )
-    server = uvicorn.Server(config)
+    server = _MechaServer(config, api.bus)
 
     console.print(f"[bold]Mecha[/bold] {__version__} on http://{HOST}:{port}")
     console.print(f"Open: {url}")

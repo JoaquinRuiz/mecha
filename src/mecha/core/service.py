@@ -330,11 +330,28 @@ class MechaService:
         return self._status(cred)
 
     async def check(
-        self, ids: Sequence[str] = (), *, force: bool = False
+        self,
+        ids: Sequence[str] = (),
+        *,
+        force: bool = False,
+        on_result: Callable[[CredentialStatus, int, int], None] | None = None,
     ) -> builtins.list[CredentialStatus]:
-        """Passive check of ``ids`` (all credentials if empty), respecting concurrency."""
+        """Passive check of ``ids`` (all credentials if empty), respecting concurrency.
+
+        ``on_result(item, done, total)`` is called as each credential finishes.
+        """
         creds = [self.get(i).credential for i in ids] if ids else self.store.all()
-        items = await asyncio.gather(*(self._check_one(c, force) for c in creds))
+        total, done = len(creds), 0
+
+        async def one(cred: Credential) -> CredentialStatus:
+            nonlocal done
+            item = await self._check_one(cred, force)
+            done += 1
+            if on_result is not None:
+                on_result(item, done, total)
+            return item
+
+        items = await asyncio.gather(*(one(c) for c in creds))
         return self._sorted(list(items))
 
     def check_sync(
@@ -362,6 +379,41 @@ class MechaService:
         if cred is None:  # pragma: no cover - resolve_id guarantees existence
             raise NotFoundError(f"No credential {id_or_prefix!r}.")
         return self._status(cred)
+
+    def update(
+        self,
+        id_or_prefix: str,
+        *,
+        label: str | None = None,
+        tags: Iterable[str] | None = None,
+        notes: str | None = None,
+        manual_expires_at: datetime | None = None,
+        clear: Iterable[str] = (),
+    ) -> CredentialStatus:
+        """Edit non-secret fields. ``clear`` names fields to reset (notes, manual_expires_at)."""
+        cred_id = self.resolve_id(id_or_prefix)
+        changes: dict[str, object] = {}
+        if label is not None:
+            if not label.strip():
+                raise DetectionError("The label cannot be empty.")
+            changes["label"] = label.strip()
+        if tags is not None:
+            changes["tags"] = _clean_tags(tags)
+        if notes is not None:
+            changes["notes"] = notes.strip() or None
+        if manual_expires_at is not None:
+            if manual_expires_at.tzinfo is None:
+                manual_expires_at = manual_expires_at.replace(tzinfo=UTC)
+            changes["manual_expires_at"] = manual_expires_at
+        for field_name in clear:
+            if field_name not in ("notes", "manual_expires_at"):
+                raise DetectionError(f"{field_name} cannot be cleared.")
+            changes[field_name] = None
+        self.store.update(cred_id, changes)
+        return self.get(cred_id)
+
+    def history(self, id_or_prefix: str, limit: int = 50) -> builtins.list[CheckResult]:
+        return self.store.history(self.resolve_id(id_or_prefix), limit)
 
     def remove(self, id_or_prefix: str) -> Credential:
         cred = self.get(id_or_prefix).credential

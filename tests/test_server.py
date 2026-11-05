@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
-from mecha.server import CSP, create_app
+from mecha.server import CSP, NONCE_PLACEHOLDER, create_app, csp
 
 PORT = 7878
 TOKEN = "test-session-token"  # not a credential: a fixed per-test session token
@@ -95,9 +96,51 @@ def test_no_cors() -> None:
 def test_security_headers_on_every_response(static_dir: Path) -> None:
     c = client(static_dir)
     for r in (c.get("/"), c.get("/api/health", headers=auth()), c.get("/api/health")):
-        assert r.headers["content-security-policy"] == CSP
+        assert r.headers["content-security-policy"].startswith("default-src 'none'")
+        assert len(r.headers.get_list("content-security-policy")) == 1
         assert r.headers["x-content-type-options"] == "nosniff"
         assert r.headers["referrer-policy"] == "no-referrer"
+    assert c.get("/api/health", headers=auth()).headers["content-security-policy"] == CSP
+
+
+def test_csp_directives_that_do_not_inherit_are_explicit() -> None:
+    for directive in ("frame-ancestors 'none'", "base-uri 'none'", "form-action 'self'"):
+        assert directive in CSP
+    assert "unsafe-inline" not in CSP
+    assert "unsafe-inline" not in csp("abc")
+
+
+def test_index_gets_a_fresh_nonce_per_response(tmp_path: Path) -> None:
+    (tmp_path / "assets").mkdir()
+    (tmp_path / "index.html").write_text(
+        f'<meta property="csp-nonce" nonce="{NONCE_PLACEHOLDER}">'
+        f'<script type="module" nonce="{NONCE_PLACEHOLDER}" src="/assets/a.js"></script>'
+    )
+    c = client(tmp_path)
+    first, second = c.get("/"), c.get("/some/route")
+    nonces = []
+    for r in (first, second):
+        assert NONCE_PLACEHOLDER not in r.text
+        nonce = re.search(r'nonce="([^"]+)"', r.text).group(1)  # type: ignore[union-attr]
+        assert f"'nonce-{nonce}'" in r.headers["content-security-policy"]
+        assert r.headers["cache-control"] == "no-store"
+        nonces.append(nonce)
+    assert nonces[0] != nonces[1]
+    assert len(nonces[0]) >= 22
+    # the raw template is never served
+    assert NONCE_PLACEHOLDER not in c.get("/index.html").text
+
+
+def test_oversized_bodies_are_rejected_unread() -> None:
+    r = client().post("/api/detect", headers={**auth(), "content-length": str(10**6)}, content=b"x")
+    assert r.status_code == 413
+    assert r.json()["code"] == "too_large"
+
+
+def test_data_endpoints_without_a_store_are_503() -> None:
+    r = client().get("/api/credentials", headers=auth())
+    assert r.status_code == 503
+    assert r.json()["code"] == "store_locked"
 
 
 def test_static_shell_is_public_and_spa_fallback(static_dir: Path) -> None:
