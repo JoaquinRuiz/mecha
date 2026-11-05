@@ -8,6 +8,8 @@ export function status(overrides: {
   kind?: CredentialStatus['credential']['kind']
   label?: string
   reasons?: string[]
+  expiry_state?: string
+  created_at?: string
 }): CredentialStatus {
   const overall = overrides.overall ?? 'green'
   return {
@@ -22,7 +24,7 @@ export function status(overrides: {
       notes: null,
       linked_path: null,
       manual_expires_at: null,
-      created_at: '2026-10-01T00:00:00+00:00',
+      created_at: overrides.created_at ?? '2026-10-01T00:00:00+00:00',
       token_expires_at: null,
       subscription_until: null,
       retiring: false,
@@ -42,7 +44,7 @@ export function status(overrides: {
       },
       expiry: {
         value: {
-          state: overrides.expires_at ? 'scheduled' : 'unknown',
+          state: overrides.expiry_state ?? (overrides.expires_at ? 'scheduled' : 'unknown'),
           expires_at: overrides.expires_at ?? null,
         },
         source: 'api',

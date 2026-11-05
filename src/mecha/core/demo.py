@@ -14,7 +14,6 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 
 from mecha.core.config import Config
-from mecha.core.errors import DemoReadOnlyError
 from mecha.core.models import (
     CheckStatus,
     Credential,
@@ -33,7 +32,7 @@ from mecha.core.models import (
     Reason,
     Validity,
 )
-from mecha.core.service import CredentialStatus, MechaService
+from mecha.core.service import MechaService
 from mecha.core.status import Observation, evaluate
 from mecha.providers.base import Provider
 from mecha.store.db import Store, open_memory_store
@@ -381,15 +380,20 @@ class DemoService(MechaService):
         super().__init__(lambda: store, now=lambda: DEMO_NOW, config=config)
         self._scenarios = {f"01DEMO{i:020d}": s for i, s in enumerate(SCENARIOS)}
 
-    def add(self, raw: str, **kwargs: object) -> CredentialStatus:
-        raise DemoReadOnlyError("Demo mode holds no secrets: adding credentials is disabled.")
+    # Adding works (it is what a demo video shows) but only the redacted form is kept: the
+    # secret is never stored, not even in the in-memory store, and checks never use it.
+    keep_secrets = False
+
+    @staticmethod
+    def _added_scenario(cred: Credential, provider: Provider) -> Scenario:
+        """A credential added during the demo: a fabricated healthy check, no network."""
+        _, path, _ = provider.endpoint(cred.kind)
+        return Scenario(cred.label, cred.provider, cred.kind, cred.redacted, f"GET {path}")
 
     def is_fresh(self, cred: Credential, now: datetime) -> bool:
         return False  # every demo check "runs"
 
     async def _observe(self, cred: Credential, provider: Provider) -> Observation:
-        scenario = self._scenarios.get(cred.id)
-        if scenario is None:  # pragma: no cover
-            return Observation(check_status=CheckStatus.failed, observed_at=self.now())
+        scenario = self._scenarios.get(cred.id) or self._added_scenario(cred, provider)
         rng = random.Random(f"{SEED}:{cred.id}")  # noqa: S311
         return _observation(scenario, self.now(), round(rng.uniform(120, 480), 1), final=True)

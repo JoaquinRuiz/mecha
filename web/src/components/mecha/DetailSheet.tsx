@@ -1,6 +1,17 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useId, useState } from 'react'
 import { Line, LineChart, YAxis } from 'recharts'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from '@/components/ui/alert-dialog'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { ChartContainer } from '@/components/ui/chart'
@@ -61,14 +72,14 @@ const toDateInput = (iso: string | null) => (iso ? iso.slice(0, 10) : '')
 export function DetailSheet({
   item,
   now,
+  horizonDays,
   api,
-  demo,
   onClose,
 }: {
   item: CredentialStatus | null
   now: string
   api: Api
-  demo: boolean
+  horizonDays: number
   onClose: () => void
 }) {
   const i18n = useI18n()
@@ -91,10 +102,14 @@ export function DetailSheet({
   }, [item])
 
   // History is fetched only when the sheet is open (never one request per card).
+  // Deleting disables the history query: the deletion event can arrive before the DELETE
+  // response, and refetching the history of a removed credential would 404.
+  const [deleting, setDeleting] = useState(false)
+  const [confirmOpen, setConfirmOpen] = useState(false)
   const history = useQuery({
     queryKey: ['history', id],
     queryFn: () => api.history(id as string, 50),
-    enabled: id !== null,
+    enabled: id !== null && !deleting,
   })
 
   const refresh = () => {
@@ -125,12 +140,20 @@ export function DetailSheet({
   })
   const remove = useMutation({
     mutationFn: () => api.remove(id as string),
+    onMutate: async () => {
+      setDeleting(true)
+      await qc.cancelQueries({ queryKey: ['history', id] })
+      qc.removeQueries({ queryKey: ['history', id] })
+    },
     onSuccess: () => {
       toast(t('deleted'))
       onClose()
       void qc.invalidateQueries({ queryKey: ['credentials'] })
     },
-    onError: (e: Error) => toast(t('failed', { message: e.message }), 'error'),
+    onError: (e: Error) => {
+      setDeleting(false)
+      toast(t('failed', { message: e.message }), 'error')
+    },
   })
 
   const r = item?.result
@@ -143,7 +166,19 @@ export function DetailSheet({
 
   return (
     <Sheet open={item !== null} onOpenChange={(open) => !open && onClose()}>
-      <SheetContent className="w-full overflow-y-auto sm:max-w-lg" data-testid="detail-sheet">
+      <SheetContent
+        className="w-full overflow-y-auto sm:max-w-lg"
+        data-testid="detail-sheet"
+        // One Escape closes one layer. Radix hands the same keydown to the sheet as well, so
+        // while the delete confirmation is open the sheet closes the confirmation itself and
+        // stays open (before this, one Escape closed both, every time).
+        onEscapeKeyDown={(e) => {
+          if (confirmOpen) {
+            e.preventDefault()
+            setConfirmOpen(false)
+          }
+        }}
+      >
         {item && r && (
           <>
             <SheetHeader>
@@ -162,7 +197,7 @@ export function DetailSheet({
                 <p id={`${formId}-why`} className="text-sm">
                   {reasonsLine(i18n, item, now)}
                 </p>
-                <Fuse model={fuseModel(item, now, t, i18n.relative)} />
+                <Fuse model={fuseModel(item, now, t, i18n.relative, horizonDays)} />
                 <p className="text-muted-foreground text-xs">{checkedLine(i18n, item, now)}</p>
                 {remote && (
                   <Button
@@ -333,17 +368,31 @@ export function DetailSheet({
                   <Button type="submit" disabled={save.isPending}>
                     {t('save')}
                   </Button>
-                  <Button
-                    type="button"
-                    variant="destructive"
-                    disabled={remove.isPending || demo}
-                    onClick={() => {
-                      if (window.confirm(t('deleteConfirm', { label: item.credential.label })))
-                        remove.mutate()
-                    }}
-                  >
-                    {t('delete')}
-                  </Button>
+                  <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}>
+                    <AlertDialogTrigger asChild>
+                      <Button type="button" variant="destructive" disabled={remove.isPending}>
+                        {t('delete')}
+                      </Button>
+                    </AlertDialogTrigger>
+                    {/* Radix focuses Cancel when it opens: deleting takes a deliberate move. */}
+                    <AlertDialogContent data-testid="delete-dialog">
+                      <AlertDialogHeader>
+                        <AlertDialogTitle>
+                          {t('deleteTitle', { label: item.credential.label })}
+                        </AlertDialogTitle>
+                        <AlertDialogDescription>
+                          <span className="block font-mono">{item.credential.redacted}</span>
+                          {t('deleteConfirm')}
+                        </AlertDialogDescription>
+                      </AlertDialogHeader>
+                      <AlertDialogFooter>
+                        <AlertDialogCancel>{t('cancel')}</AlertDialogCancel>
+                        <AlertDialogAction variant="destructive" onClick={() => remove.mutate()}>
+                          {t('delete')}
+                        </AlertDialogAction>
+                      </AlertDialogFooter>
+                    </AlertDialogContent>
+                  </AlertDialog>
                 </div>
               </form>
             </div>

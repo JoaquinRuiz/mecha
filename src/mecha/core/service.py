@@ -100,6 +100,9 @@ class MechaService:
         self._global = asyncio.Semaphore(self.config.scheduler.concurrency)
         self._per_provider: dict[ProviderId, asyncio.Semaphore] = {}
 
+    # Demo mode keeps only the redacted form: the secret is never stored, even in memory.
+    keep_secrets = True
+
     def now(self) -> datetime:
         return self._now()
 
@@ -162,7 +165,7 @@ class MechaService:
             subscription_until=jwt.subscription_until if jwt else None,
             retiring=det.retiring,
         )
-        self.store.insert(cred, secret)
+        self.store.insert(cred, secret if self.keep_secrets else None)
         return self._status(cred)
 
     @staticmethod

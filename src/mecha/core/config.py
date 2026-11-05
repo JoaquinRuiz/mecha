@@ -43,6 +43,8 @@ class _Section(BaseModel):
 class ThresholdsConfig(_Section):
     soon_days: int = Field(14, ge=1, le=365)
     low_funds_usd: Decimal = Field(Decimal("5"), ge=0)
+    # Length of a full fuse: the same time left looks the same on every card.
+    fuse_horizon_days: int = Field(90, ge=1, le=3650)
 
 
 class SchedulerConfig(_Section):

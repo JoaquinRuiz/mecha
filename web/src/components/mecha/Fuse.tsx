@@ -13,22 +13,29 @@ export interface FuseModel {
   text: string
 }
 
+/** Tone from the expiry state computed by the backend (which knows `soon_days`). */
+const TONE: Record<string, FuseModel['tone']> = {
+  expired: 'red',
+  soon: 'amber',
+  scheduled: 'green',
+  none: 'green',
+}
+
 export function fuseModel(
   item: CredentialStatus,
   now: string,
   t: ReturnType<typeof useI18n>['t'],
   relative: ReturnType<typeof useI18n>['relative'],
-  soonDays = 14,
+  horizonDays: number,
 ): FuseModel {
-  const expiresAt = item.result.expiry.value.expires_at
+  const expiry = item.result.expiry.value
+  const expiresAt = expiry.expires_at
   if (expiresAt) {
-    const end = new Date(expiresAt).getTime()
-    const start = new Date(item.credential.created_at).getTime()
-    const at = new Date(now).getTime()
-    const total = Math.max(end - start, DAY)
-    const fraction = Math.min(1, Math.max(0, (end - at) / total))
-    const left = end - at
-    const tone = left <= 0 ? 'red' : left < soonDays * DAY ? 'amber' : 'green'
+    // A fixed horizon: the same time left draws the same length on every card, whenever the
+    // key was added. Beyond the horizon the fuse is simply full.
+    const left = new Date(expiresAt).getTime() - new Date(now).getTime()
+    const fraction = Math.min(1, Math.max(0, left / (horizonDays * DAY)))
+    const tone = TONE[expiry.state] ?? 'grey'
     const isSubscription =
       item.credential.subscription_until !== null &&
       item.credential.subscription_until === expiresAt

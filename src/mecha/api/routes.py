@@ -23,7 +23,6 @@ from pydantic import BaseModel, ConfigDict, Field
 from mecha.core.capabilities import load_capabilities
 from mecha.core.errors import (
     AmbiguousProviderError,
-    DemoReadOnlyError,
     DetectionError,
     DuplicateCredentialError,
     MechaError,
@@ -90,7 +89,6 @@ ERROR_STATUS: list[tuple[type[MechaError], int]] = [
     (AmbiguousProviderError, 422),
     (DetectionError, 422),
     (StoreLockedError, 503),
-    (DemoReadOnlyError, 403),
 ]
 
 
@@ -109,6 +107,11 @@ def _listing(ctx: ApiContext, items: list[CredentialStatus]) -> dict[str, Any]:
         "schema_version": SCHEMA_VERSION,
         "generated_at": ctx.service.now().isoformat(),  # the UI computes "3 h ago" from this
         "demo": ctx.demo,
+        # Display settings the UI must not hard-code (they live in config.toml).
+        "settings": {
+            "soon_days": ctx.service.config.thresholds.soon_days,
+            "fuse_horizon_days": ctx.service.config.thresholds.fuse_horizon_days,
+        },
         "credentials": [status_json(i) for i in items],
     }
 

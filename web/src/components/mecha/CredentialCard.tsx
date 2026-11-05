@@ -32,6 +32,7 @@ export function ProviderMark({ provider }: { provider: string }) {
 interface Props {
   item: CredentialStatus
   now: string
+  horizonDays: number
   onOpen: (id: string) => void
   onCheck: (id: string) => void
   checking: boolean
@@ -40,6 +41,7 @@ interface Props {
 export const CredentialCard = memo(function CredentialCard({
   item,
   now,
+  horizonDays,
   onOpen,
   onCheck,
   checking,
@@ -84,7 +86,7 @@ export const CredentialCard = memo(function CredentialCard({
         <p className="min-h-4 text-xs" data-testid="reasons">
           {reasonsLine(i18n, item, now)}
         </p>
-        <Fuse model={fuseModel(item, now, t, i18n.relative)} />
+        <Fuse model={fuseModel(item, now, t, i18n.relative, horizonDays)} />
         <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-xs">
           <dt className="text-muted-foreground">{t('signal.funds')}</dt>
           <dd>{fundsLine(i18n, item)}</dd>

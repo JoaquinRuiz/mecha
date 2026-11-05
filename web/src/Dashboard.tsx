@@ -22,7 +22,7 @@ import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { useI18n } from '@/i18n'
 import { makeApi } from '@/lib/api'
 import { connectEvents } from '@/lib/events'
-import { type CredentialStatus, OVERALL_ORDER, type Overall } from '@/lib/types'
+import { type CredentialStatus, DEFAULT_SETTINGS, OVERALL_ORDER, type Overall } from '@/lib/types'
 
 // Loaded on first use: the detail sheet carries the chart library, which the first paint
 // does not need.
@@ -76,7 +76,14 @@ export function Dashboard({ token }: { token: string }) {
   const api = useMemo(() => makeApi(token), [token])
 
   // One request for the whole dashboard; history is loaded only by the detail sheet.
-  const listing = useQuery({ queryKey: ['credentials'], queryFn: api.list })
+  // Kept fresh even without events: a `mecha check` from cron does not go through the
+  // event bus, and a key can expire while the tab is open.
+  const listing = useQuery({
+    queryKey: ['credentials'],
+    queryFn: api.list,
+    refetchOnWindowFocus: true,
+    refetchInterval: 60_000,
+  })
   const providers = useQuery({
     queryKey: ['providers'],
     queryFn: api.providers,
@@ -149,6 +156,7 @@ export function Dashboard({ token }: { token: string }) {
   const data = listing.data
   const items = data?.credentials ?? EMPTY
   const now = data?.generated_at ?? new Date().toISOString()
+  const horizonDays = (data?.settings ?? DEFAULT_SETTINGS).fuse_horizon_days
 
   const counts = useMemo(() => {
     const c: Record<Overall, number> = { green: 0, amber: 0, red: 0, grey: 0, local: 0 }
@@ -407,6 +415,7 @@ export function Dashboard({ token }: { token: string }) {
                 key={item.credential.id}
                 item={item}
                 now={now}
+                horizonDays={horizonDays}
                 onOpen={setSelected}
                 onCheck={checkOne}
                 checking={checking.has(item.credential.id) || progress !== null}
@@ -414,7 +423,12 @@ export function Dashboard({ token }: { token: string }) {
             ))}
           </section>
         ) : (
-          <CredentialTable items={ordered} now={now} onOpen={setSelected} />
+          <CredentialTable
+            items={ordered}
+            now={now}
+            horizonDays={horizonDays}
+            onOpen={setSelected}
+          />
         )}
       </main>
 
@@ -423,8 +437,8 @@ export function Dashboard({ token }: { token: string }) {
           <DetailSheet
             item={selectedItem}
             now={now}
+            horizonDays={horizonDays}
             api={api}
-            demo={!!data?.demo}
             onClose={() => setSelected(null)}
           />
         )}

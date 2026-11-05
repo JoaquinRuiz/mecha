@@ -20,10 +20,12 @@ const helper = createColumnHelper<typeof features, CredentialStatus>()
 export function CredentialTable({
   items,
   now,
+  horizonDays,
   onOpen,
 }: {
   items: CredentialStatus[]
   now: string
+  horizonDays: number
   onOpen: (id: string) => void
 }) {
   const i18n = useI18n()
@@ -65,7 +67,7 @@ export function CredentialTable({
         helper.display({
           id: 'expiry',
           header: t('signal.expiry'),
-          cell: ({ row }) => fuseModel(row.original, now, t, i18n.relative).text,
+          cell: ({ row }) => fuseModel(row.original, now, t, i18n.relative, horizonDays).text,
         }),
         helper.display({
           id: 'funds',
@@ -89,7 +91,7 @@ export function CredentialTable({
           ),
         }),
       ]),
-    [i18n, now, onOpen, t],
+    [i18n, now, horizonDays, onOpen, t],
   )
   const table = useTable({ features, columns, data: items })
   return (

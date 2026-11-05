@@ -10,6 +10,7 @@ describe('CredentialCard', () => {
       <CredentialCard
         item={status({ overall: 'red', reasons: ['validity_invalid'] })}
         now={NOW}
+        horizonDays={90}
         onOpen={() => {}}
         onCheck={() => {}}
         checking={false}
@@ -30,6 +31,7 @@ describe('CredentialCard', () => {
       <CredentialCard
         item={status({})}
         now={NOW}
+        horizonDays={90}
         onOpen={onOpen}
         onCheck={onCheck}
         checking={false}
@@ -49,6 +51,7 @@ describe('CredentialCard', () => {
       <CredentialCard
         item={status({ overall: 'local', kind: 'oauth_token', reasons: ['local_only'] })}
         now={NOW}
+        horizonDays={90}
         onOpen={() => {}}
         onCheck={() => {}}
         checking={false}

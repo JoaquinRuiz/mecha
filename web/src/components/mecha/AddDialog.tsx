@@ -118,14 +118,21 @@ export function AddDialog({
       <DialogContent data-testid="add-dialog">
         <DialogHeader>
           <DialogTitle>{t('addTitle')}</DialogTitle>
-          <DialogDescription>{demo ? t('demoReadOnly') : t('secretHint')}</DialogDescription>
+          <DialogDescription>
+            {t('secretHint')}
+            {demo && (
+              <span className="mt-1 block text-amber-700 dark:text-amber-300">
+                {t('demoAddHint')}
+              </span>
+            )}
+          </DialogDescription>
         </DialogHeader>
         <form
           id={`${id}-form`}
           className="space-y-3"
           onSubmit={(e) => {
             e.preventDefault()
-            if (!demo && secret.trim() && !blocked) add.mutate()
+            if (secret.trim() && !blocked) add.mutate()
           }}
         >
           <div className="space-y-1">
@@ -141,7 +148,6 @@ export function AddDialog({
               autoCorrect="off"
               data-1p-ignore="true"
               data-lpignore="true"
-              disabled={demo}
               aria-describedby={`${id}-detected`}
               className="font-mono"
             />
@@ -211,12 +217,7 @@ export function AddDialog({
           )}
           <div className="space-y-1">
             <Label htmlFor={`${id}-label`}>{t('label')}</Label>
-            <Input
-              id={`${id}-label`}
-              value={label}
-              onChange={(e) => setLabel(e.target.value)}
-              disabled={demo}
-            />
+            <Input id={`${id}-label`} value={label} onChange={(e) => setLabel(e.target.value)} />
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1">
@@ -226,7 +227,6 @@ export function AddDialog({
                 value={tags}
                 placeholder={t('tagsHint')}
                 onChange={(e) => setTags(e.target.value)}
-                disabled={demo}
               />
             </div>
             <div className="space-y-1">
@@ -236,7 +236,6 @@ export function AddDialog({
                 type="date"
                 value={expiry}
                 onChange={(e) => setExpiry(e.target.value)}
-                disabled={demo}
               />
             </div>
           </div>
@@ -253,7 +252,7 @@ export function AddDialog({
           <Button
             type="submit"
             form={`${id}-form`}
-            disabled={demo || !secret.trim() || add.isPending || !!blocked}
+            disabled={!secret.trim() || add.isPending || !!blocked}
           >
             {t('add')}
           </Button>

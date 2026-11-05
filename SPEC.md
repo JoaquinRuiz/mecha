@@ -380,6 +380,8 @@ La pantalla principal responde «¿qué está roto o va a romperse?» en menos d
 - Cabecera con cinco contadores (verde, ámbar, rojo, gris y «solo local», para que siempre sumen el total) animados con un number ticker, el botón «Comprobar todo» con progreso en vivo por SSE y la hora de la última comprobación global.
 - Barra de filtros por proveedor, estado, tipo y etiqueta, con búsqueda. ⌘K abre una paleta de comandos (Command de shadcn/ui) para saltar a una clave o lanzar acciones; `N` abre el alta.
 - Rejilla de tarjetas con vista alternativa en tabla. Orden por defecto: rojo, ámbar, gris y verde, y dentro de cada grupo, lo que caduca antes.
+- Datos al día con la pestaña abierta: además de los eventos, la lista se recarga al volver a la pestaña y cada 60 s, porque un `mecha check` lanzado desde cron no pasa por el bus de eventos y una clave puede caducar con la pestaña abierta.
+- Borrar pide confirmación en un `AlertDialog` con la etiqueta y la forma redactada, con el foco en Cancelar; un `Escape` cierra solo la confirmación.
 
 **Tarjeta de credencial**
 
@@ -391,8 +393,8 @@ La pantalla principal responde «¿qué está roto o va a romperse?» en menos d
 
 **La mecha, componente firma**
 
-- Barra horizontal que se consume según el tiempo restante hasta caducar; si no hay caducidad, según el saldo restante frente al presupuesto.
-- Una chispa animada marca el extremo que arde, y el color pasa de verde a ámbar y a rojo con los umbrales del semáforo.
+- Barra horizontal que se consume según el tiempo restante hasta caducar, sobre un horizonte fijo (`fuse_horizon_days`, 90 días por defecto en `config.toml`): el mismo tiempo restante se ve igual en todas las tarjetas, se diera de alta cuando se diera; más allá del horizonte, la barra está llena. Si no hay caducidad, según el saldo restante frente al presupuesto (Fase 4).
+- Una chispa animada marca el extremo que arde, y el color sale del estado de caducidad que calcula el backend (`scheduled`, `soon`, `expired`), así respeta `soon_days` de `config.toml` sin repetir el umbral en el frontend.
 - Sin caducidad ni saldo conocidos: barra punteada gris con el texto «sin fecha conocida».
 - Respeta `prefers-reduced-motion`: sin chispa ni animaciones.
 
@@ -417,7 +419,7 @@ La pantalla principal responde «¿qué está roto o va a romperse?» en menos d
 - Geist Sans y Geist Mono, empaquetadas; un único color de acento (el ámbar de una mecha encendida) y los colores de estado reservados para el estado.
 - Contraste AA, foco visible y uso completo con teclado.
 - Textos en español e inglés según el idioma del navegador.
-- Modo demo (`mecha serve --demo`) con datos falsos, para capturas, el README y vídeos: sin secretos (solo formas redactadas y resultados fabricados), determinista (semilla y «ahora» fijos), con cada estado del semáforo y cada tipo de credencial, sin red, con el alta desactivada y una insignia «Demo» visible.
+- Modo demo (`mecha serve --demo`) con datos falsos, para capturas, el README y vídeos: sin secretos (solo formas redactadas y resultados fabricados), determinista (semilla y «ahora» fijos), con cada estado del semáforo y cada tipo de credencial, sin red y con una insignia «Demo» visible. Se puede añadir y borrar en memoria: del secreto añadido solo se guarda la forma redactada, nunca el secreto, y sus comprobaciones son fabricadas.
 
 ## CLI
 

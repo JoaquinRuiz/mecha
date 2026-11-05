@@ -146,3 +146,54 @@ test.describe('Spanish browser', () => {
     expect(problems).toEqual([])
   })
 })
+
+test('the list refreshes every 60 s without events (e.g. a cron mecha check)', async ({ page }) => {
+  const problems = await guard(page)
+  await page.clock.install()
+  const listings: number[] = []
+  page.on('request', (r) => {
+    if (new globalThis.URL(r.url()).pathname === '/api/credentials') listings.push(Date.now())
+  })
+  await load(page)
+  expect(listings).toHaveLength(1)
+  await page.clock.fastForward(61_000)
+  await expect.poll(() => listings.length).toBeGreaterThanOrEqual(2)
+  expect(problems).toEqual([])
+})
+
+test('demo: add a key and delete it in memory, with a confirm dialog focused on Cancel', async ({
+  page,
+}) => {
+  const problems = await guard(page)
+  await load(page)
+  const fake = `xai-DEMOVIDEO${'a1b2c3d4'.repeat(8)}`
+  await page.keyboard.press('n')
+  const dialog = page.getByTestId('add-dialog')
+  await expect(dialog).toBeVisible()
+  await expect(dialog).toContainText(/redacted form|forma redactada/)
+  await dialog.getByLabel(/^Secret$|^Secreto$/).fill(fake)
+  await expect(dialog).toContainText(/xAI · API key/)
+  await dialog.getByLabel(/^Label$|^Etiqueta$/).fill('Shown in the video')
+  await dialog.getByRole('button', { name: /^Add$|^Añadir$/ }).click()
+  await expect(dialog).toBeHidden()
+  await expect(page.getByTestId('credential-card')).toHaveCount(21)
+  expect(await page.content()).not.toContain(fake)
+
+  await page.getByRole('button', { name: 'Shown in the video', exact: true }).click()
+  const sheet = page.getByTestId('detail-sheet')
+  await expect(sheet).toBeVisible()
+  await sheet.getByRole('button', { name: /^Delete$|^Borrar$/ }).click()
+  const confirm = page.getByTestId('delete-dialog')
+  await expect(confirm).toBeVisible()
+  await expect(confirm).toContainText('Shown in the video')
+  await expect(confirm).toContainText('xai-')
+  await expect(confirm.getByRole('button', { name: /^Cancel$|^Cancelar$/ })).toBeFocused()
+  await page.keyboard.press('Escape') // cancelling keeps the key
+  await expect(confirm).toBeHidden()
+  await expect(sheet).toBeVisible() // one Escape closes one layer, not the sheet too
+  await expect(page.getByTestId('credential-card')).toHaveCount(21)
+  await sheet.getByRole('button', { name: /^Delete$|^Borrar$/ }).click()
+  await confirm.getByRole('button', { name: /^Delete$|^Borrar$/ }).click()
+  await expect(page.getByTestId('credential-card')).toHaveCount(20)
+  expect(problems).toEqual([])
+})

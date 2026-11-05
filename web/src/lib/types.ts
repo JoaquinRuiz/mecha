@@ -62,10 +62,18 @@ export interface CredentialStatus {
   last_known: { overall: Overall; checked_at: string } | null
 }
 
+export interface DisplaySettings {
+  soon_days: number
+  fuse_horizon_days: number
+}
+
+export const DEFAULT_SETTINGS: DisplaySettings = { soon_days: 14, fuse_horizon_days: 90 }
+
 export interface Listing {
   schema_version: number
   generated_at: string
   demo: boolean
+  settings: DisplaySettings
   credentials: CredentialStatus[]
 }
 
