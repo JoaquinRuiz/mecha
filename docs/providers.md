@@ -30,6 +30,38 @@ the provider's official documentation. Unverified patterns still work, but the C
 xAI management keys have no documented prefix: they are added with
 `--provider xai --kind management_key`.
 
+## Error mapping and free endpoints (phase 2, checked 2026-11-04)
+
+Two sources: the official docs, and **live responses to deliberately fake keys** (random
+strings with the right prefix; no real credential, free endpoints only). Live findings that
+contradict the docs are marked ⚠.
+
+| Provider | Item | Spec said | Docs / live say | Mecha does |
+| --- | --- | --- | --- | --- |
+| Anthropic | 402 | — | [Errors](https://platform.claude.com/docs/en/api/errors): 402 `billing_error` | Funds `empty`, red, «billing problem» |
+| Anthropic | 401 | invalid | Docs: malformed, revoked **or expired** are all 401; live fake key: 401 `authentication_error` «invalid x-api-key» | Invalid, or expired if a known expiry passed |
+| Anthropic | 400 at a spend limit you set | — | Docs: 400 when an org/workspace spend limit is reached; message text not documented | No mapping (`unknown`) |
+| Anthropic | Tier spend cap | — | Docs: 429 without `retry-after`; indistinguishable from a rate limit by status alone | `throttled` |
+| OpenAI | No credit | 429 `insufficient_quota` | [Error codes](https://developers.openai.com/api/docs/guides/error-codes): 429 `code: credit_balance_exhausted`; `type` may still be `insufficient_quota` | `empty` (both) |
+| OpenAI | Spend limits | — | 429 `organization_spend_limit_exceeded`, `project_spend_limit_exceeded`, `organization_usage_limit_exceeded` | `capped` |
+| OpenAI | Expired key | «verificar» | No specific code documented: 401 | Invalid (or expired with a known date) |
+| OpenAI | Restricted key without `api.model.read` | — | Docs: missing permissions is a 401 cause and `/v1/models` needs `api.model.read`; the text «Missing scopes» is **not** in the docs | Amber «no permission» when the 401 message contains «missing scopes» / «insufficient permissions» |
+| OpenAI | Invalid key (live) | 401 `invalid_api_key` | Live: 401 `invalid_api_key`, message already masks the key | Invalid |
+| Gemini | Prepay depleted | 429 «prepayment credits are depleted» | [API errors](https://aistudio.google.com/docs/api-errors): **402** `payment_required`; the 429 text comes from a forum | `empty` (402 and the 429 variant) |
+| Gemini | Invalid key | 400 `API_KEY_INVALID` | Docs: 401. Live: an `AIza` key gets 400 `INVALID_ARGUMENT` + `API_KEY_INVALID`; an `AQ.` key gets 401 | Invalid (both) |
+| Gemini | `ACCESS_TOKEN_TYPE_UNSUPPORTED` | Known `AQ.` account issue | ⚠ Live: **every** invalid `AQ.` key gets this reason | Invalid plus a *hint* («if it works in AI Studio, see the known `AQ.` issue»), not a diagnosis |
+| Gemini | Monthly spend cap | 429, `capped` («verificar texto») | Docs describe the caps but not the error; only a 10-minute spend rate limit is documented (429 `RESOURCE_EXHAUSTED`) | **No mapping** until the real error is seen |
+| Gemini | 403 with `ErrorInfo.reason` | Generic «sin permiso» | Google API key restrictions report `API_KEY_IP_ADDRESS_BLOCKED`, `API_KEY_HTTP_REFERRER_BLOCKED`, `API_KEY_SERVICE_BLOCKED`, `SERVICE_DISABLED` | Amber with the specific reason (an IP-restricted key may work on its server) |
+| Gemini | Leaked key | «reported as leaked» | [Troubleshooting](https://aistudio.google.com/docs/troubleshooting): 403 «Your API key was reported as leaked. Please use another API key.» | `blocked` |
+| Gemini | Models list | key in header | Docs example uses `?key=` in the URL; other examples use `x-goog-api-key` | Always the header; `pageSize=1000` (documented max) |
+| xAI | Invalid API key | 401 | [Debugging](https://docs.x.ai/developers/debugging.md): 401. ⚠ Live: **400** `{"code": "invalid-argument", "error": "Incorrect API key provided…"}` | Invalid on 400 + «Incorrect API key» |
+| xAI | Invalid management key | 401 | Live: 401 «Invalid bearer token. Please ensure you use a valid management key.» | Invalid |
+| xAI | Management key prefix | «no documented prefix» | The validation example shows `xai-...r42q`: same prefix as API keys | Detected as API key; use `--kind management_key` |
+| xAI | `GET /v1/api-key` times | — | Docs say «Unix timestamp», example shows ISO strings | Both accepted |
+| xAI | Key list `disabled` | boolean | Docs example: `"disabled": "false"` (string) | Both accepted |
+| xAI | Out of credit error text | «por verificar» | Not documented | No mapping (`unknown`) |
+| xAI | Billing reads method | «verificar» | Phase 4 | — |
+
 ## Notes for phase 4 (hint matching)
 
 - Anthropic `partial_key_hint` uses three ASCII dots: `sk-ant-api03-R2D...igAA`.

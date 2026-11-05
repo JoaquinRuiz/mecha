@@ -16,7 +16,8 @@ from importlib.resources import files
 from pathlib import Path
 
 from mecha.core.errors import MechaError, StoreCorruptError, StoreLockedError, WrongKeyError
-from mecha.core.models import Budget, Credential, CredentialKind, ProviderId
+from mecha.core.models import Budget, CheckResult, Credential, CredentialKind, Overall, ProviderId
+from mecha.core.status import Observation
 from mecha.core.ulid import new_ulid
 from mecha.store import keys
 from mecha.store.crypto import (
@@ -32,6 +33,7 @@ from mecha.store.crypto import (
 log = logging.getLogger(__name__)
 
 FORMAT_VERSION = "1"
+HISTORY_LIMIT = 500
 
 
 def _migrations() -> list[tuple[int, str]]:
@@ -217,6 +219,75 @@ class Store:
     def delete(self, cred_id: str) -> bool:
         cur = self.conn.execute("DELETE FROM credentials WHERE id = ?", (cred_id,))
         return cur.rowcount > 0
+
+    # --- history ------------------------------------------------------------------
+    def add_result(self, result: CheckResult, observation: Observation | None) -> None:
+        """Store one check (result + the raw observation) and keep the last 500."""
+        payload = json.dumps(
+            {
+                "result": result.model_dump(mode="json"),
+                "observation": observation.model_dump(mode="json") if observation else None,
+            }
+        )
+        self.conn.execute("BEGIN")
+        self.conn.execute(
+            "INSERT INTO check_results (credential_id, checked_at, overall, payload) "
+            "VALUES (?, ?, ?, ?)",
+            (result.credential_id, _ts(result.checked_at), result.overall.value, payload),
+        )
+        self.conn.execute(
+            """DELETE FROM check_results WHERE credential_id = ? AND id NOT IN (
+                   SELECT id FROM check_results WHERE credential_id = ?
+                   ORDER BY checked_at DESC, id DESC LIMIT ?)""",
+            (result.credential_id, result.credential_id, HISTORY_LIMIT),
+        )
+        self.conn.execute("COMMIT")
+
+    def last_observation(self, cred_id: str) -> Observation | None:
+        row = self.conn.execute(
+            "SELECT payload FROM check_results WHERE credential_id = ? "
+            "ORDER BY checked_at DESC, id DESC LIMIT 1",
+            (cred_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        obs = json.loads(row["payload"]).get("observation")
+        return Observation.model_validate(obs) if obs else None
+
+    def failure_streak(self, cred_id: str, limit: int = 32) -> int:
+        """How many of the latest checks failed in a row (grey, could not check)."""
+        rows = self.conn.execute(
+            "SELECT payload FROM check_results WHERE credential_id = ? "
+            "ORDER BY checked_at DESC, id DESC LIMIT ?",
+            (cred_id, limit),
+        ).fetchall()
+        streak = 0
+        for row in rows:
+            obs = json.loads(row["payload"]).get("observation") or {}
+            if obs.get("check_status") != "failed":
+                break
+            streak += 1
+        return streak
+
+    def last_known(self, cred_id: str) -> tuple[Overall, datetime] | None:
+        """The most recent non-grey result: what a grey card shows as last known state."""
+        row = self.conn.execute(
+            "SELECT overall, checked_at FROM check_results "
+            "WHERE credential_id = ? AND overall != 'grey' "
+            "ORDER BY checked_at DESC, id DESC LIMIT 1",
+            (cred_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        return Overall(row["overall"]), datetime.fromisoformat(row["checked_at"])
+
+    def history(self, cred_id: str, limit: int = 50) -> list[CheckResult]:
+        rows = self.conn.execute(
+            "SELECT payload FROM check_results WHERE credential_id = ? "
+            "ORDER BY checked_at DESC, id DESC LIMIT ?",
+            (cred_id, limit),
+        ).fetchall()
+        return [CheckResult.model_validate(json.loads(r["payload"])["result"]) for r in rows]
 
     def close(self) -> None:
         try:

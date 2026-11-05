@@ -34,3 +34,8 @@ def isolated_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     for var in ("MECHA_PASSPHRASE", "MECHA_PASSPHRASE_FILE", "MECHA_LOG_LEVEL"):
         monkeypatch.delenv(var, raising=False)
     return home
+
+
+@pytest.fixture
+def anyio_backend() -> str:
+    return "asyncio"

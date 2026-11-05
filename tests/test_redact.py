@@ -68,3 +68,46 @@ def test_log_records_are_redacted(caplog: pytest.LogCaptureFixture) -> None:
     formatted = "\n".join(logging.Formatter().format(r) for r in caplog.records)
     assert secret not in formatted
     assert "RuntimeError" in formatted
+
+
+def test_redaction_keeps_args_shape_for_uvicorn_access_log() -> None:
+    """uvicorn's AccessFormatter unpacks record.args; redaction must not collapse them."""
+    from uvicorn.logging import AccessFormatter
+
+    secret = fake("sk-ant-api03-", 90)
+    logger = logging.getLogger("uvicorn.access.test")
+    records: list[logging.LogRecord] = []
+
+    class Keep(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            records.append(record)
+
+    handler = Keep()
+    logger.addHandler(handler)
+    logger.setLevel(logging.INFO)
+    try:
+        logger.info(
+            '%s - "%s %s HTTP/%s" %d', "127.0.0.1:5000", "GET", f"/x?k={secret}", "1.1", 200
+        )
+    finally:
+        logger.removeHandler(handler)
+    [record] = records
+    line = AccessFormatter('%(client_addr)s - "%(request_line)s" %(status_code)s').format(record)
+    assert "GET /x?k=" in line
+    assert "200" in line
+    assert secret not in line
+
+
+def test_redaction_of_mapping_args_and_objects(caplog: pytest.LogCaptureFixture) -> None:
+    secret = fake("xai-", 60)
+
+    class Leaky:
+        def __str__(self) -> str:
+            return f"obj({secret})"
+
+    logger = logging.getLogger("mecha.test.args")
+    with caplog.at_level(logging.INFO):
+        logger.info("%(key)s and %(n)d", {"key": secret, "n": 3})
+        logger.info("object %s", Leaky())
+    assert secret not in caplog.text
+    assert "and 3" in caplog.text

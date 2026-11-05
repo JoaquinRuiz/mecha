@@ -32,12 +32,14 @@ from typer.core import TyperCommand, TyperGroup
 from typer.exceptions import TyperException
 
 from mecha import __version__
+from mecha.core.config import load_config
 from mecha.core.detect import Detection
 from mecha.core.errors import AmbiguousProviderError, MechaError
 from mecha.core.logging import install_log_redaction
 from mecha.core.models import CredentialKind, Overall, ProviderId
 from mecha.core.paths import db_path
 from mecha.core.redact import redact_text
+from mecha.core.scheduler import Scheduler
 from mecha.core.service import CredentialStatus, MechaService
 from mecha.core.status import exit_code_for
 from mecha.server import create_app, generate_token
@@ -171,7 +173,7 @@ def _prompt_provider(default: str | None) -> ProviderId:
 
 def _service() -> MechaService:
     prompt = _passphrase_prompt if _interactive() else None
-    return MechaService(lambda: open_store(db_path(), prompt))
+    return MechaService(lambda: open_store(db_path(), prompt), config=load_config())
 
 
 def _read_secret(what: str = "Secret") -> str:
@@ -212,6 +214,16 @@ REASON_TEXT = {
     "validity_invalid": "invalid",
     "validity_revoked": "revoked",
     "validity_blocked": "blocked",
+    "permission_denied": "no permission",
+    "billing_error": "billing problem",
+    "team_blocked": "team blocked",
+    "key_disabled": "key disabled",
+    "key_blocked": "key blocked",
+    "gemini_ip_restricted": "key restricted to other IP addresses (may work on its server)",
+    "gemini_referrer_restricted": "key restricted to other HTTP referrers",
+    "gemini_service_blocked": "key not allowed to call the Gemini API",
+    "gemini_api_disabled": "Gemini API disabled in the key's project",
+    "gemini_aq_rejected": "AQ. key rejected; if it works in AI Studio, see the known AQ. issue",
 }
 
 WARNING_TEXT = {
@@ -272,10 +284,42 @@ def _dump(data: Any) -> None:
     out.print_json(json.dumps(data, ensure_ascii=False), highlight=False)
 
 
+def _ago(value: datetime, now: datetime) -> str:
+    seconds = max(0, int((now - value).total_seconds()))
+    if seconds < 60:
+        return "just now"
+    for unit, size in (("d", 86400), ("h", 3600), ("min", 60)):
+        if seconds >= size:
+            return f"{seconds // size} {unit} ago"
+    return "just now"  # pragma: no cover
+
+
+def _why(item: CredentialStatus, now: datetime) -> str:
+    text = ", ".join(REASON_TEXT.get(r.code, r.code) for r in item.result.reasons)
+    if item.result.overall is Overall.grey and item.last_known is not None:
+        known = item.last_known
+        text += f" · last {STATUS_TEXT[known.overall][2]} {_ago(known.checked_at, now)}"
+    return text
+
+
+def _checked(item: CredentialStatus, now: datetime) -> str:
+    if item.result.mode == "offline":
+        return "never"
+    text = _ago(item.result.checked_at, now)
+    return f"{text} (cached)" if item.cached else text
+
+
 def _status_json(item: CredentialStatus) -> dict[str, Any]:
+    known = item.last_known
     return {
         "credential": item.credential.model_dump(mode="json"),
         "result": item.result.model_dump(mode="json"),
+        "cached": item.cached,
+        "last_known": (
+            {"overall": known.overall.value, "checked_at": known.checked_at.isoformat()}
+            if known
+            else None
+        ),
     }
 
 
@@ -328,8 +372,20 @@ def serve(
     base = VITE_DEV_URL if dev else f"http://{HOST}:{port}"
     url = f"{base}/#t={token}"
 
+    background = []
+    service = _service()
+    if service.config.scheduler.enabled:
+        try:
+            _ = service.store  # unlock now (keyring / passphrase / prompt), before serving
+        except MechaError as exc:
+            console.print(f"[red]error:[/red] {escape(exc.message)}")
+            raise typer.Exit(EXIT_FAILURE) from None
+        background.append(Scheduler(service).run_forever)
+        hours = service.config.scheduler.interval_hours
+        console.print(f"Scheduler: passive checks every {hours:g} h")
+
     config = uvicorn.Config(
-        create_app(token=token, port=port),
+        create_app(token=token, port=port, background=background),
         host=HOST,
         port=port,
         log_level="info",
@@ -348,6 +404,8 @@ def serve(
     except OSError as exc:  # pragma: no cover - e.g. port already in use
         console.print(f"[red]Could not start server:[/red] {exc}")
         raise typer.Exit(EXIT_FAILURE) from exc
+    finally:
+        service.close()
     if not server.started:
         raise typer.Exit(EXIT_FAILURE)
 
@@ -467,9 +525,11 @@ def ls_cmd(
         items = service.list()
     finally:
         service.close()
-    now = datetime.now(UTC)
-    code = exit_code_for([i.result.overall for i in items])
+    _report(items, as_json=as_json, code=exit_code_for([i.result.overall for i in items]))
 
+
+def _report(items: list[CredentialStatus], *, as_json: bool, code: int) -> None:
+    now = datetime.now(UTC)
     if as_json:
         _dump(
             {
@@ -484,6 +544,43 @@ def ls_cmd(
     else:
         out.print(_ls_table(items, now, out.width))
     raise typer.Exit(code)
+
+
+@app.command("check", cls=NagiosCommand)
+@handle_errors_nagios
+def check_cmd(
+    ids: Annotated[
+        list[str] | None, typer.Argument(metavar="[ID]...", help="IDs or prefixes (default: all).")
+    ] = None,
+    as_json: Annotated[bool, typer.Option("--json", help="Machine-readable output.")] = False,
+    strict: Annotated[
+        bool, typer.Option("--strict", help="Treat grey (could not check) as failure: exit 3.")
+    ] = False,
+    force: Annotated[
+        bool, typer.Option("--force", help="Ignore the minimum interval and check now.")
+    ] = False,
+) -> None:
+    """Check credentials against their provider's free endpoint (no tokens spent).
+
+    Exit code (Nagios): 0 green/grey/local, 1 amber, 2 red, 3 any error; with --strict a
+    grey result exits 3 (red still wins). Results younger than the minimum interval are
+    reused and marked as cached unless --force.
+    """
+    service = _service()
+    try:
+        items = service.check_sync(ids or [], force=force)
+    finally:
+        service.close()
+    code = exit_code_for([i.result.overall for i in items], strict=strict)
+    _report(items, as_json=as_json, code=code)
+
+
+def _unique_prefix_len(ids: list[str], minimum: int = 10) -> int:
+    """Shortest prefix length that tells every ID apart (ULIDs start with a timestamp)."""
+    for n in range(minimum, 27):
+        if len({i[:n] for i in ids}) == len(ids):
+            return n
+    return 26
 
 
 def _ls_table(items: list[CredentialStatus], now: datetime, width: int) -> Table:
@@ -504,6 +601,7 @@ def _ls_table(items: list[CredentialStatus], now: datetime, width: int) -> Table
         table.add_column("Checked", no_wrap=True)
     if show_why:
         table.add_column("Why", overflow="fold")
+    width_id = _unique_prefix_len([i.credential.id for i in items])
     for i in items:
         c = i.credential
         icon, colour, text = STATUS_TEXT[i.result.overall]
@@ -512,7 +610,7 @@ def _ls_table(items: list[CredentialStatus], now: datetime, width: int) -> Table
         if show_why and exp.value.expires_at:
             expires += f" {exp.source}"
         row = [
-            c.id[:10],
+            c.id[:width_id],
             f"[{colour}]{icon} {text}[/{colour}]",
             escape(c.label),
             f"{c.provider.value}/{KIND_SHORT[c.kind]}",
@@ -521,10 +619,9 @@ def _ls_table(items: list[CredentialStatus], now: datetime, width: int) -> Table
             row.append(escape(c.redacted))
         row.append(expires)
         if show_funds:
-            checked = i.result.checked_at.strftime("%Y-%m-%d %H:%M")
-            row += [_funds_cell(i), "never" if i.result.mode == "offline" else checked]
+            row += [_funds_cell(i), _checked(i, now)]
         if show_why:
-            row.append(", ".join(REASON_TEXT.get(r.code, r.code) for r in i.result.reasons))
+            row.append(_why(i, now))
         table.add_row(*row)
     return table
 

@@ -14,9 +14,18 @@ the browser must load it before it can read the token from the fragment. It cont
 
 from __future__ import annotations
 
+import asyncio
 import json
 import secrets
-from collections.abc import Awaitable, Callable, MutableMapping
+from collections.abc import (
+    AsyncIterator,
+    Awaitable,
+    Callable,
+    Coroutine,
+    MutableMapping,
+    Sequence,
+)
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from pathlib import Path
 from typing import Any
 
@@ -136,13 +145,40 @@ def _error_body(code: str, message: str) -> dict[str, str]:
     return {"code": code, "message": message}
 
 
-def create_app(*, token: str, port: int, static_dir: Path | None = STATIC_DIR) -> FastAPI:
-    """Build the application. ``static_dir`` is the compiled frontend (may be missing)."""
+BackgroundJob = Callable[[], Coroutine[Any, Any, None]]
+
+
+def _lifespan(
+    jobs: Sequence[BackgroundJob],
+) -> Callable[[FastAPI], AbstractAsyncContextManager[None]]:
+    @asynccontextmanager
+    async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+        tasks: list[asyncio.Task[None]] = [asyncio.create_task(job()) for job in jobs]
+        try:
+            yield
+        finally:
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+    return lifespan
+
+
+def create_app(
+    *,
+    token: str,
+    port: int,
+    static_dir: Path | None = STATIC_DIR,
+    background: Sequence[BackgroundJob] = (),
+) -> FastAPI:
+    """Build the application. ``static_dir`` is the compiled frontend (may be missing);
+    ``background`` jobs (e.g. the scheduler) run for the lifetime of the server."""
     app = FastAPI(
         title="Mecha",
         docs_url=None,
         redoc_url=None,
         openapi_url=None,
+        lifespan=_lifespan(background),
     )
 
     @app.exception_handler(HTTPException)

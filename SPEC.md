@@ -97,7 +97,7 @@ Al pegar un secreto, Mecha lo clasifica sin red por prefijo, forma JWT o estruct
 | `sk-or-v1-` | OpenRouter | API key | Saldo y caducidad con la propia clave (fase 4) |
 | JWT (`eyJ…`, tres segmentos) | Según el claim `iss` | Token OAuth | Se decodifica sin verificar firma: `exp`, email, plan |
 
-Las claves de gestión de xAI no tienen prefijo documentado: el alta permite marcarlas como tales y se validan con `GET /auth/management-keys/validation`.
+Las claves de gestión de xAI no tienen un prefijo propio: el ejemplo oficial de su validación muestra `xai-...r42q`, igual que una API key. La detección no puede distinguirlas, así que el alta permite marcarlas (`--kind management_key`) y se validan con `GET /auth/management-keys/validation`.
 
 **Tokens JWT**
 
@@ -124,14 +124,14 @@ Solo xAI (con clave de gestión) y OpenRouter devuelven saldo por API; Anthropic
 | --- | --- | --- | --- | --- |
 | Anthropic | `GET /v1/models` | Sin endpoint; el error aparece al generar | `expires_at` con admin key | `POST /v1/messages`, `max_tokens: 1` |
 | OpenAI | `GET /v1/models` | Sin endpoint; gasto con admin key (Costs API) | `expires_at` con admin key | `POST /v1/embeddings`, una palabra |
-| Google Gemini | `GET /v1beta/models` | Sin endpoint; el prepago avisa con un 429 | No expuesta | `generateContent`, `maxOutputTokens: 1` |
+| Google Gemini | `GET /v1beta/models` | Sin endpoint; el prepago agotado devuelve 402 | No expuesta | `generateContent`, `maxOutputTokens: 1` |
 | xAI | `GET /v1/api-key` | Saldo prepago con clave de gestión | `expireTime` con clave de gestión | `POST /v1/chat/completions` mínima |
 | OpenRouter (fase 4) | `GET /api/v1/key` | `limit_remaining` con la propia clave | `expires_at` con la propia clave | No hace falta |
 
 ### Anthropic
 
 - Base `https://api.anthropic.com`, autenticación con `x-api-key` (la API también acepta `Authorization: Bearer`). La cabecera `anthropic-version` va en configuración: por defecto `2026-10-21`, publicada el 21 de octubre de 2026; `2023-06-01` sigue funcionando. La versión nueva rechaza `temperature`, `top_p` y `top_k`, que la sonda no envía.
-- **Pasiva:** `GET /v1/models`. 200 es válida (guardar nº de modelos y la cabecera `anthropic-organization-id` si viene), 401 inválida, 403 sin permiso. No informa de saldo.
+- **Pasiva:** `GET /v1/models` (admin keys: `GET /v1/organizations/api_keys?limit=1`). 200 es válida (guardar nº de modelos y la cabecera `anthropic-organization-id` si viene), 401 inválida, 402 `billing_error` es saldo `empty` con «problema de facturación», 403 ámbar «sin permiso». No informa de saldo.
 - **Activa:** `POST /v1/messages` con el modelo más barato que liste `/v1/models` (configurable) y `max_tokens: 1`. Un 400 cuyo mensaje contenga «credit balance» o «insufficient credits» es saldo `empty`. Leer `anthropic-ratelimit-requests-*`, `anthropic-ratelimit-input-tokens-*` y `anthropic-ratelimit-output-tokens-*` (limit, remaining, reset). Verificar si `POST /v1/messages/count_tokens`, que es gratuito, devuelve el mismo error de saldo; si lo hace, pasa a ser la sonda por defecto.
 - **Admin key:** `GET /v1/organizations/api_keys`, paginado con `after_id` y `limit` hasta 1000. Cada clave trae `status` (`active`, `inactive`, `archived`, `expired`), `expires_at`, `partial_key_hint`, `scope` (con `2026-10-21` sustituye a `workspace_id`) y `created_by`. Mecha cruza `partial_key_hint` con las claves guardadas para rellenar estado y caducidad: genera la pista en el formato de Anthropic (`sk-ant-api03-R2D...igAA`, tres puntos ASCII) a partir del secreto descifrado en memoria y la compara con la de la API; nunca compara con su propio `redacted`.
 - **OAuth `sk-ant-oat01-`:** sin llamadas remotas (principio 4).
@@ -140,8 +140,8 @@ Solo xAI (con clave de gestión) y OpenRouter devuelven saldo por API; Anthropic
 ### OpenAI
 
 - Base `https://api.openai.com/v1`, autenticación con `Authorization: Bearer`.
-- **Pasiva:** `GET /v1/models`. 200 es válida, 401 (`invalid_api_key`) inválida (verificar si una clave caducada devuelve un código propio). Este endpoint no comprueba la cuota, así que no detecta falta de saldo.
-- **Activa:** `POST /v1/embeddings` con el modelo de embeddings más barato disponible y una sola palabra. 429 `insufficient_quota` es saldo `empty`; 429 `rate_limit_exceeded` es `throttled`; un 403 por permisos del proyecto es «sonda no permitida» y no invalida la clave. Leer `x-ratelimit-limit-requests`, `x-ratelimit-remaining-requests`, `x-ratelimit-limit-tokens`, `x-ratelimit-remaining-tokens` y `x-ratelimit-reset-*`.
+- **Pasiva:** `GET /v1/models` (admin keys: `GET /v1/organization/admin_api_keys?limit=1`). 200 es válida, 401 (`invalid_api_key`) inválida; una clave caducada no tiene código propio documentado (es un 401). Un 401 con «Missing scopes» es una clave restringida sin `api.model.read`: ámbar «sin permiso», no inválida. Este endpoint no comprueba la cuota, así que no detecta falta de saldo.
+- **Activa:** `POST /v1/embeddings` con el modelo de embeddings más barato disponible y una sola palabra. 429 `credit_balance_exhausted` (variante: `type` `insufficient_quota`) es saldo `empty`; 429 `organization_spend_limit_exceeded`, `project_spend_limit_exceeded` u `organization_usage_limit_exceeded` es `capped`; 429 `rate_limit_exceeded` o `slow_down` es `throttled`; un 403 por permisos del proyecto es «sonda no permitida» y no invalida la clave. Leer `x-ratelimit-limit-requests`, `x-ratelimit-remaining-requests`, `x-ratelimit-limit-tokens`, `x-ratelimit-remaining-tokens` y `x-ratelimit-reset-*`.
 - **Caducidad:** desde el 10 de septiembre de 2026 las project keys pueden caducar y la organización puede imponer una vida máxima. Solo es visible con admin key.
 - **Admin key (`sk-admin-`):** `GET /v1/organization/projects` y, por proyecto, `GET /v1/organization/projects/{project_id}/api_keys`, que devuelve `expires_at` (null si no caduca), `last_used_at`, `redacted_value`, `owner` y `owner_project_access`. `GET /v1/organization/admin_api_keys` da lo mismo para las admin keys. Mecha cruza `redacted_value` con las claves guardadas generando, a partir del secreto descifrado, la pista en el formato de OpenAI (la doc muestra `sk-abc...def`); nunca compara con su propio `redacted`.
 - **Saldo:** no hay endpoint; el soporte de OpenAI lo confirmó en septiembre de 2026 y remite a la Costs API. Con admin key y un presupuesto manual (importe y fecha de compra), Mecha estima el saldo restando `GET /v1/organization/costs` desde esa fecha, y lo marca como `inferred`.
@@ -151,15 +151,15 @@ Solo xAI (con clave de gestión) y OpenRouter devuelven saldo por API; Anthropic
 
 - Base `https://generativelanguage.googleapis.com/v1beta`, con la clave siempre en la cabecera `x-goog-api-key` y nunca en la URL, para que no acabe en logs.
 - **Tipos de clave:** desde el 28 de mayo de 2026 AI Studio solo crea auth keys (`AQ.`), ligadas a una cuenta de servicio. Google bloquea las standard keys (`AIza`) sin restringir y está retirando el resto; fuentes de terceros sitúan el corte total en septiembre de 2026. Toda `AIza` lleva aviso ámbar aunque responda 200.
-- **Pasiva:** `GET /v1beta/models`. 200 es válida; 400 `API_KEY_INVALID` inválida; 403 `PERMISSION_DENIED` sin permiso o API no habilitada; un mensaje «reported as leaked» es `blocked` por filtración. Un 401 `ACCESS_TOKEN_TYPE_UNSUPPORTED` con una clave `AQ.` es un problema de cuenta conocido desde julio de 2026: se muestra como rechazada con enlace a la explicación.
-- **Activa:** `POST /v1beta/models/{modelo}:generateContent` con el modelo más barato disponible (configurable) y `maxOutputTokens: 1`. 429 `RESOURCE_EXHAUSTED` con «prepayment credits are depleted» es saldo `empty`; con el mensaje de tope de gasto mensual es `capped` (verificar texto exacto); con detalles de cuota (`QuotaFailure`) es `throttled`, y si el `quotaId` contiene `FreeTier` se marca plan gratuito como `inferred`. Verificar si `countTokens`, que es gratuito, refleja el agotamiento del prepago.
+- **Pasiva:** `GET /v1beta/models?pageSize=1000`. 200 es válida; 401 inválida (oficial); 400 `API_KEY_INVALID` inválida (lo que devuelve en vivo una `AIza` inválida); 402 es prepago agotado; 403 `PERMISSION_DENIED` es ámbar «sin permiso» (API no habilitada o proyecto restringido); el mensaje «reported as leaked» es `blocked` por filtración. Cualquier `AQ.` inválida recibe 401 `ACCESS_TOKEN_TYPE_UNSUPPORTED` (comprobado en vivo), igual que las reales afectadas por el problema de cuenta conocido desde julio de 2026: se muestra como inválida con esa pista y el enlace, sin afirmar el diagnóstico.
+- **Activa:** `POST /v1beta/models/{modelo}:generateContent` con el modelo más barato disponible (configurable) y `maxOutputTokens: 1`. 402 Payment Required (oficial; variante: 429 «prepayment credits are depleted») es saldo `empty`; el tope de gasto mensual no tiene error documentado y queda sin mapeo (`docs/providers.md`); 429 con detalles de cuota (`QuotaFailure`) es `throttled`, y si el `quotaId` contiene `FreeTier` se marca plan gratuito como `inferred`. Verificar si `countTokens`, que es gratuito, refleja el agotamiento del prepago.
 - **Saldo:** el prepago existe desde abril de 2026, pero sin API de lectura: `unknown` salvo que un error diga otra cosa.
 - **Caducidad:** no expuesta; fecha manual opcional.
 
 ### xAI
 
 - Base `https://api.x.ai/v1`, autenticación con `Authorization: Bearer`.
-- **Pasiva:** `GET /v1/api-key` describe la propia clave: `api_key_blocked`, `api_key_disabled`, `team_blocked`, `acls`, `name`, `create_time`, `team_id`, `api_key_id` y `redacted_api_key`. Cualquier flag a `true` es `blocked`; `team_blocked` se muestra como «equipo bloqueado», porque la API no dice el motivo.
+- **Pasiva:** `GET /v1/api-key` describe la propia clave: `api_key_blocked`, `api_key_disabled`, `team_blocked`, `acls`, `name`, `create_time`, `team_id`, `api_key_id` y `redacted_api_key`. Cualquier flag a `true` es `blocked`; `team_blocked` se muestra como «equipo bloqueado», porque la API no dice el motivo. Una clave desconocida recibe 400 «Incorrect API key provided» (comprobado en vivo; la documentación dice 401) y se trata como inválida.
 - **Activa (opcional):** `POST /v1/chat/completions` mínima. Con el prepago agotado y el límite de facturación mensual a 0 USD, xAI rechaza las peticiones; el texto exacto del error está por verificar y se mapea a `empty`.
 - **Clave de gestión:** base `https://management-api.x.ai`, autenticación con `Authorization: Bearer`. `GET /auth/management-keys/validation` la valida. `GET /auth/teams/{teamId}/api-keys` lista las claves con `expireTime`, `disabled`, `aclStrings` y `createTime`; un `expireTime` pasado significa clave rechazada. Bajo `/v1/billing/teams/{team_id}/` están `prepaid/balance` (`total.val`, céntimos de USD como string), `postpaid/spending-limits` y `postpaid/invoice/preview` (`prepaidCredits`, `prepaidCreditsUsed`, límite efectivo). La doc no explicita el método HTTP de estas lecturas: verificar.
 - `GET /v1/api-key` devuelve gratis el `team_id`, así que una clave de gestión enriquece sola a todas las claves de su equipo, cruzando por `api_key_id`.
@@ -170,23 +170,33 @@ Solo xAI (con clave de gestión) y OpenRouter devuelven saldo por API; Anthropic
 
 ### Mapa de errores
 
-Cada proveedor tiene su `errors.py` con este mapeo, probado con fixtures; los mensajes se comparan por subcadena, sin distinguir mayúsculas.
+Cada proveedor tiene su `errors.py` con este mapeo como funciones puras, probado con una fixture por fila (`tests/test_error_map.py` comprueba que cada ID de esta tabla tiene su caso); los mensajes se comparan por subcadena, sin distinguir mayúsculas. Las filas de sondas activas, APIs de administración y OpenRouter se conectan en la Fase 4. Revisado contra la documentación oficial el 4 de noviembre de 2026; lo que no cuadra está en `docs/providers.md`.
 
-| Proveedor | Señal | Estado en Mecha |
-| --- | --- | --- |
-| Todos | 401 en el endpoint de validación | Validez `invalid` |
-| Todos | Timeout, error de red o 5xx | Gris; 3 reintentos con backoff exponencial |
-| Anthropic | 400 con «credit balance» o «insufficient credits» | Saldo `empty` |
-| Anthropic (admin) | `status` `inactive` / `archived` / `expired` | Validez `blocked` / `revoked` / caducidad `expired` |
-| OpenAI | 429 `insufficient_quota` | Saldo `empty` |
-| OpenAI | 429 `rate_limit_exceeded` | Límites `throttled` |
-| Gemini | 400 `API_KEY_INVALID` | Validez `invalid` |
-| Gemini | «reported as leaked» | Validez `blocked` |
-| Gemini | 429 «prepayment credits are depleted» | Saldo `empty` |
-| Gemini | 429 de tope de gasto mensual | Saldo `capped` |
-| xAI | `api_key_disabled`, `api_key_blocked` o `team_blocked` a `true` | Validez `blocked` |
-| xAI (gestión) | `expireTime` en el pasado | Caducidad `expired` |
-| OpenRouter | `limit_remaining` ≤ 0 | Saldo `empty` |
+| ID | Proveedor | Señal | Estado en Mecha |
+| --- | --- | --- | --- |
+| `all-401` | Todos | 401 en el endpoint de validación | Validez `invalid`; si su caducidad conocida (manual o de admin) ya pasó, se muestra como caducada |
+| `all-403` | Todos | 403 (sin permiso, región o proyecto restringido) | Ámbar «sin permiso»: es una respuesta del proveedor, no un fallo al comprobar |
+| `all-429` | Todos | 429 sin otra señal | Límites `throttled` |
+| `all-network` | Todos | Timeout, error de red o 5xx/529 | Gris; 3 reintentos con backoff exponencial |
+| `anthropic-credit` | Anthropic | 400 con «credit balance» o «insufficient credits» | Saldo `empty` |
+| `anthropic-billing` | Anthropic | 402 `billing_error` | Saldo `empty`, rojo, «problema de facturación» |
+| `anthropic-admin-status` | Anthropic (admin) | `status` `inactive` / `archived` / `expired` | Validez `blocked` / `revoked` / caducidad `expired` |
+| `openai-credit` | OpenAI | 429 `credit_balance_exhausted` (variante: `type` `insufficient_quota`) | Saldo `empty` |
+| `openai-spend-limit` | OpenAI | 429 `organization_spend_limit_exceeded`, `project_spend_limit_exceeded`, `organization_usage_limit_exceeded` | Saldo `capped` |
+| `openai-rate-limit` | OpenAI | 429 `rate_limit_exceeded` o `slow_down` | Límites `throttled` |
+| `openai-missing-scopes` | OpenAI | 401 con «Missing scopes» o «insufficient permissions» (clave restringida) | Ámbar «sin permiso», no inválida |
+| `gemini-invalid` | Gemini | 401 (variante: 400 `API_KEY_INVALID`) | Validez `invalid` |
+| `gemini-restricted` | Gemini | 403 con `ErrorInfo.reason` `API_KEY_IP_ADDRESS_BLOCKED`, `API_KEY_HTTP_REFERRER_BLOCKED`, `API_KEY_SERVICE_BLOCKED` o `SERVICE_DISABLED` | Ámbar con el motivo concreto («restringida a otras IP: puede funcionar en su servidor», etc.) en lugar del genérico «sin permiso» |
+| `gemini-leaked` | Gemini | «reported as leaked» | Validez `blocked` |
+| `gemini-prepay` | Gemini | 402 Payment Required (variante: 429 «prepayment credits are depleted») | Saldo `empty` |
+| `gemini-quota` | Gemini | 429 con `QuotaFailure` | Límites `throttled`; si el `quotaId` contiene `FreeTier`, plan gratuito como `inferred` |
+| `gemini-aq-unsupported` | Gemini | 401 `ACCESS_TOKEN_TYPE_UNSUPPORTED` con clave `AQ.` | Inválida, con la pista «si funciona en AI Studio, puede ser el problema conocido de las `AQ.`»: cualquier `AQ.` inválida devuelve ese motivo (comprobado en vivo), así que no es un diagnóstico |
+| `xai-invalid` | xAI | 400 con «Incorrect API key provided» (API) o 401 «Invalid bearer token» (gestión) | Validez `invalid`. La documentación dice 401, pero la API responde 400 (comprobado en vivo) |
+| `xai-flags` | xAI | `api_key_disabled`, `api_key_blocked` o `team_blocked` a `true` | Validez `blocked` («equipo bloqueado» para `team_blocked`) |
+| `xai-mgmt-expired` | xAI (gestión) | `expireTime` en el pasado | Caducidad `expired` |
+| `openrouter-empty` | OpenRouter | `limit_remaining` ≤ 0 | Saldo `empty` |
+
+Sin mapeo por ahora: el tope de gasto mensual de Gemini (la documentación no dice qué error devuelve) y el error de saldo agotado de xAI (texto sin documentar). Ambos quedan `unknown` hasta ver el error real.
 
 ## Arquitectura y stack
 
@@ -241,14 +251,19 @@ class Provider(Protocol):
     id: ProviderId
     capabilities: Capabilities  # qué puede saber y con qué tipo de credencial
 
-    async def check_passive(self, cred: Credential, http: httpx.AsyncClient) -> CheckResult: ...
+    allowed_hosts: frozenset[str]  # el cliente HTTP rechaza cualquier otro destino
+
+    def endpoint(self, kind: CredentialKind) -> tuple[str, str, dict]: ...  # endpoint gratuito
+    async def check_passive(
+        self, cred: Credential, secret: str, http: httpx.AsyncClient, ctx: ProviderContext
+    ) -> Observation: ...
     async def check_active(self, cred: Credential, http: httpx.AsyncClient) -> CheckResult: ...
     async def enrich(
         self, admin: Credential, children: list[Credential], http: httpx.AsyncClient
     ) -> dict[CredentialId, Enrichment]: ...
 ```
 
-La detección no está en el plugin: la resuelve el núcleo con `detect_patterns.toml`. Un plugin nunca lanza excepciones crudas; devuelve señales, y un fallo de red es un `CheckResult` gris.
+La detección no está en el plugin: la resuelve el núcleo con `detect_patterns.toml`. El núcleo descifra el secreto y se lo pasa al plugin solo durante la petición. Un plugin nunca lanza excepciones crudas: devuelve una `Observation` (lo que aprendió de una respuesta), que el motor de estados fusiona con las condiciones offline en el momento de mostrarla, así la caducidad sigue contando entre comprobaciones; un fallo de red es una observación gris. La matriz `capabilities` vive en `data/capabilities.toml` y un test la contrasta con el `endpoint()` de cada plugin.
 
 **Flujo de una comprobación**
 
@@ -258,7 +273,9 @@ La detección no está en el plugin: la resuelve el núcleo con `detect_patterns
 4. El motor de estados calcula el semáforo, guarda el resultado y lo emite por SSE.
 5. Si hay una clave de administración o gestión vinculada, su enriquecimiento se fusiona con `source: api`.
 
-Concurrencia: 4 comprobaciones a la vez en total y 2 por proveedor, con un intervalo mínimo de 5 minutos por credencial. El planificador lanza comprobaciones pasivas cada 6 horas por defecto.
+Concurrencia: 4 comprobaciones a la vez en total y 2 por proveedor, con un intervalo mínimo de 5 minutos por credencial (también en `mecha check`, que reutiliza el último resultado, lo marca como «en caché» con su hora y admite `--force`). El planificador corre dentro de `mecha serve` y lanza comprobaciones pasivas cada 6 horas por defecto; tras un fallo reintenta con backoff (el intervalo mínimo, el doble, y así hasta `interval_hours`), para que un portátil que despierta sin red no quede gris horas. Un resultado fallido nunca cuenta como «fresco». Para cron se usa `mecha check`.
+
+**Configuración.** `config.toml` en `MECHA_HOME`, validado con Pydantic y con aviso ante claves desconocidas: `[thresholds]` (`soon_days`, `low_funds_usd`), `[scheduler]` (`enabled`, `interval_hours`, `min_interval_minutes`, `concurrency`, `per_provider`), `[http]` (`timeout_seconds`, `retries`, `backoff_seconds`) y `[providers.anthropic]` (`version`). Las variables de entorno se reservan para rutas y secretos.
 
 **Empaquetado**
 
@@ -349,7 +366,7 @@ Mecha guarda secretos de alto valor, así que el diseño asume que cualquier web
 - **Sin vuelta atrás.** Tras el alta, el frontend solo ve `redacted` y `fingerprint`. En la v1 no existe «mostrar clave».
 - **Logs.** Un filtro de logging (instalado como factoría de `LogRecord`, cubre todos los loggers y el texto de las excepciones) sustituye cualquier coincidencia de los patrones de detección por su forma redactada, y httpx nunca registra cabeceras.
 - **Trazas.** Typer va con `pretty_exceptions_show_locals=False` y sin trazas de Rich: mostrarían las variables locales, secreto incluido. Los errores inesperados de la CLI se imprimen redactados y salen con 3.
-- **Salidas controladas.** Cada plugin declara su lista de hosts permitidos y el cliente HTTP rechaza cualquier otro destino.
+- **Salidas controladas.** Cada plugin declara su lista de hosts permitidos y el cliente HTTP rechaza cualquier otro destino, otro puerto, `http://` y las redirecciones. Respeta `HTTPS_PROXY`/`NO_PROXY` y `SSL_CERT_FILE`/`SSL_CERT_DIR` (proxy corporativo, CA propia): el guard valida el host de destino con o sin proxy, y httpx no lee `.netrc` sin `NetRCAuth` explícito.
 - **Ficheros vinculados.** Solo lectura; los tokens se leen en cada comprobación y nunca se copian.
 - **Copias.** `mecha export` produce un fichero cifrado con frase de paso; no hay export en claro.
 
@@ -409,7 +426,7 @@ La CLI comparte núcleo con la web y sirve para cron, CI y para quien vive en la
 | `mecha` o `mecha serve` | Arranca el servidor y abre el navegador; `--port`, `--no-open`, `--demo` |
 | `mecha add` | Alta con entrada oculta o por stdin (el secreto nunca va como argumento: acabaría en el historial y en la lista de procesos); `--label`, `--tag`, `--notes`, `--provider`, `--kind`, `--expires`. La entrada se normaliza: espacios y saltos de línea, comillas, `NOMBRE=` y `Bearer` delante |
 | `mecha ls` | Tabla con semáforo, tipo, caducidad, saldo y última comprobación |
-| `mecha check [ID…]` | Comprueba; `--active` para sondas, `--json` para scripts, `--strict` para tratar el gris como fallo |
+| `mecha check [ID…]` | Comprueba con el endpoint gratuito; `--json` para scripts, `--strict` para tratar el gris como fallo, `--force` para saltarse el intervalo mínimo; `--active` para sondas llega en la Fase 4 |
 | `mecha detect` | Clasifica un secreto leído de stdin, sin red ni guardado |
 | `mecha import .env` | Importa `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, `GOOGLE_API_KEY`, `XAI_API_KEY`, `OPENROUTER_API_KEY` y cualquier valor con prefijo reconocido |
 | `mecha link <herramienta>` | Vincula el fichero de sesión de `codex`, `claude-code` o `gemini-cli`; `--path` para rutas propias |
@@ -417,7 +434,7 @@ La CLI comparte núcleo con la web y sirve para cron, CI y para quien vive en la
 | `mecha export` y `mecha restore` | Copia cifrada con frase de paso |
 | `mecha passphrase set` / `remove` | Define, cambia o quita la frase de paso de recuperación del almacén |
 
-`check` y `ls` siguen la convención de Nagios: salen con 0 si todo está verde, gris o solo local (OK), 1 si hay algún ámbar (aviso), 2 si hay algún rojo (crítico) y 3 si falla Mecha (desconocido). Cualquier error en esos dos comandos, incluidos los de uso como una opción mal escrita, sale con 3 y nunca con el 2 de Click, que un script leería como «hay rojo». Con `--strict`, `check` trata el gris como fallo y sale con 3. En el resto de comandos, 2 indica un error del usuario (opción inválida, clave duplicada o ambigua) y 3 un fallo de Mecha.
+`check` y `ls` siguen la convención de Nagios: salen con 0 si todo está verde, gris o solo local (OK), 1 si hay algún ámbar (aviso), 2 si hay algún rojo (crítico) y 3 si falla Mecha (desconocido). Cualquier error en esos dos comandos, incluidos los de uso como una opción mal escrita, sale con 3 y nunca con el 2 de Click, que un script leería como «hay rojo». Con `--strict`, `check` trata el gris como fallo y sale con 3; el rojo sigue ganando (2), y el gris gana al ámbar porque «no pude comprobarlo» no es un mero aviso. En el resto de comandos, 2 indica un error del usuario (opción inválida, clave duplicada o ambigua) y 3 un fallo de Mecha.
 
 ```bash
 # cada mañana a las 8: aviso si alguna clave está en ámbar o en rojo
@@ -459,8 +476,8 @@ Modelos, detección, decodificación JWT, almacén cifrado, parte offline del mo
 
 Plugins de Anthropic, OpenAI, Gemini y xAI con su endpoint gratuito, motor de estados, historial y planificador.
 
-- [ ] Cada fila del mapa de errores tiene una fixture que produce el estado esperado.
-- [ ] `mecha check --json` devuelve un esquema estable y los códigos de salida definidos.
+- [x] Cada fila del mapa de errores tiene una fixture que produce el estado esperado.
+- [x] `mecha check --json` devuelve un esquema estable y los códigos de salida definidos.
 
 ### Fase 3 · Dashboard
 
@@ -473,6 +490,8 @@ Tarjetas, mecha, filtros, paleta ⌘K, panel de detalle, alta con detección en 
 
 Sondas activas, claves de administración y gestión con enriquecimiento, ficheros vinculados, importación de `.env`, OpenRouter y saldo estimado de OpenAI.
 
+
+Una caducidad que venga de una API (admin key, gestión de xAI, OpenRouter) se guarda como dato de la credencial, igual que la manual, y no solo dentro de la última observación: si el siguiente check falla, la clave que caduca mañana debe seguir en ámbar, no pasar a gris.
 - [ ] Una admin key de OpenAI rellena `expires_at` y `last_used_at` de las project keys guardadas.
 - [ ] Una clave de gestión de xAI muestra el saldo prepago en USD.
 - [ ] Un fichero de Codex vinculado muestra plan y fin de suscripción sin copiar tokens.

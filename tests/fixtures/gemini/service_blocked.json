@@ -1,0 +1,22 @@
+{
+  "source": "https://cloud.google.com/docs/authentication/api-keys (API key restrictions) and the Google API error model (ErrorInfo.reason)",
+  "status": 403,
+  "headers": {},
+  "body": {
+    "error": {
+      "code": 403,
+      "message": "Requests to this API generativelanguage.googleapis.com method google.ai.generativelanguage.v1beta.ModelService.ListModels are blocked.",
+      "status": "PERMISSION_DENIED",
+      "details": [
+        {
+          "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+          "reason": "API_KEY_SERVICE_BLOCKED",
+          "domain": "googleapis.com",
+          "metadata": {
+            "service": "generativelanguage.googleapis.com"
+          }
+        }
+      ]
+    }
+  }
+}
