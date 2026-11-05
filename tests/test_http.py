@@ -119,10 +119,25 @@ async def test_headers_never_reach_the_logs(caplog: pytest.LogCaptureFixture) ->
     assert logging.getLogger("httpcore").getEffectiveLevel() >= logging.WARNING
 
 
-def test_no_proxy_or_netrc_from_environment() -> None:
+def test_honours_proxy_and_ca_settings_but_never_redirects() -> None:
     client = make_client({"api.x.ai"})
-    assert client.trust_env is False
+    assert client.trust_env is True  # HTTPS_PROXY / SSL_CERT_FILE for corporate networks
     assert client.follow_redirects is False
+    assert client.auth is None  # no .netrc: httpx only uses it with an explicit NetRCAuth
+
+
+async def test_guard_still_blocks_other_hosts_behind_a_proxy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("HTTPS_PROXY", "http://proxy.corp.example:3128")
+    with respx.mock(assert_all_called=False) as router:
+        route = router.route().mock(return_value=httpx.Response(200))
+        async with make_client({"api.x.ai"}, FAST) as client:
+            with pytest.raises(DisallowedRequestError):
+                await send(client, "GET", "https://evil.example/", settings=FAST, sleep=no_sleep)
+            ok = await send(client, "GET", "https://api.x.ai/v1/api-key", settings=FAST)
+    assert ok.response.status_code == 200
+    assert route.call_count == 1
 
 
 def test_client_requires_hosts() -> None:

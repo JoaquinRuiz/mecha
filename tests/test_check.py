@@ -251,3 +251,63 @@ def test_default_config() -> None:
     assert c.http.timeout_seconds == 10
     assert c.http.retries == 3
     assert c.providers.anthropic.version == "2026-10-21"
+
+
+async def test_failed_manual_check_is_not_fresh(svc: MechaService, clock: Clock) -> None:
+    svc.add(fake("xai-"))
+    with respx.mock as router:
+        route = router.route(host="api.x.ai").mock(
+            side_effect=[
+                httpx.ConnectError("down"),
+                httpx.Response(200, json=fixture("xai", "api_key_ok")["body"]),
+            ]
+        )
+        [first] = await svc.check()
+        assert first.result.overall is Overall.grey
+        clock.advance(minutes=1)
+        [second] = await svc.check()  # within 5 min, but the last one failed: check again
+    assert route.call_count == 2
+    assert not second.cached
+    assert second.result.overall is Overall.green
+
+
+async def test_scheduler_backs_off_after_failures(svc: MechaService, clock: Clock) -> None:
+    """Failures retry at min_interval, 2x, 4x… capped at interval_hours; success resets."""
+    svc.add(fake("xai-"))
+    sched = Scheduler(svc)
+    with respx.mock as router:
+        route = router.route(host="api.x.ai").mock(side_effect=httpx.ConnectError("asleep"))
+        await sched.run_once()  # first check fails
+        waits = []
+        for _ in range(8):
+            start = clock.now
+            while not await sched.run_once():
+                clock.advance(minutes=1)
+            waits.append(int((clock.now - start).total_seconds() // 60))
+    assert waits == [5, 10, 20, 40, 80, 160, 320, 360]  # capped at 6 h
+    assert route.call_count == 9
+
+
+async def test_scheduler_back_to_normal_interval_after_recovery(
+    svc: MechaService, clock: Clock
+) -> None:
+    svc.add(fake("xai-"))
+    sched = Scheduler(svc)
+    ok = httpx.Response(200, json=fixture("xai", "api_key_ok")["body"])
+    with respx.mock as router:
+        router.route(host="api.x.ai").mock(side_effect=[httpx.ConnectError("x"), ok, ok])
+        await sched.run_once()  # fail
+        clock.advance(minutes=5)
+        [recovered] = await sched.run_once()  # retried after 5 min
+        assert recovered.result.overall is Overall.green
+        clock.advance(hours=5, minutes=59)
+        assert await sched.run_once() == []  # regular 6 h interval again
+        clock.advance(minutes=1)
+        assert len(await sched.run_once()) == 1
+
+
+def test_retry_delay_values(svc: MechaService) -> None:
+    assert svc.retry_delay(0) == timedelta(hours=6)
+    assert svc.retry_delay(1) == timedelta(minutes=5)
+    assert svc.retry_delay(3) == timedelta(minutes=20)
+    assert svc.retry_delay(50) == timedelta(hours=6)

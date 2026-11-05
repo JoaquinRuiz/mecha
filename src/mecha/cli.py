@@ -219,6 +219,10 @@ REASON_TEXT = {
     "team_blocked": "team blocked",
     "key_disabled": "key disabled",
     "key_blocked": "key blocked",
+    "gemini_ip_restricted": "key restricted to other IP addresses (may work on its server)",
+    "gemini_referrer_restricted": "key restricted to other HTTP referrers",
+    "gemini_service_blocked": "key not allowed to call the Gemini API",
+    "gemini_api_disabled": "Gemini API disabled in the key's project",
     "gemini_aq_rejected": "AQ. key rejected; if it works in AI Studio, see the known AQ. issue",
 }
 

@@ -51,6 +51,7 @@ contradict the docs are marked ⚠.
 | Gemini | Invalid key | 400 `API_KEY_INVALID` | Docs: 401. Live: an `AIza` key gets 400 `INVALID_ARGUMENT` + `API_KEY_INVALID`; an `AQ.` key gets 401 | Invalid (both) |
 | Gemini | `ACCESS_TOKEN_TYPE_UNSUPPORTED` | Known `AQ.` account issue | ⚠ Live: **every** invalid `AQ.` key gets this reason | Invalid plus a *hint* («if it works in AI Studio, see the known `AQ.` issue»), not a diagnosis |
 | Gemini | Monthly spend cap | 429, `capped` («verificar texto») | Docs describe the caps but not the error; only a 10-minute spend rate limit is documented (429 `RESOURCE_EXHAUSTED`) | **No mapping** until the real error is seen |
+| Gemini | 403 with `ErrorInfo.reason` | Generic «sin permiso» | Google API key restrictions report `API_KEY_IP_ADDRESS_BLOCKED`, `API_KEY_HTTP_REFERRER_BLOCKED`, `API_KEY_SERVICE_BLOCKED`, `SERVICE_DISABLED` | Amber with the specific reason (an IP-restricted key may work on its server) |
 | Gemini | Leaked key | «reported as leaked» | [Troubleshooting](https://aistudio.google.com/docs/troubleshooting): 403 «Your API key was reported as leaked. Please use another API key.» | `blocked` |
 | Gemini | Models list | key in header | Docs example uses `?key=` in the URL; other examples use `x-goog-api-key` | Always the header; `pageSize=1000` (documented max) |
 | xAI | Invalid API key | 401 | [Debugging](https://docs.x.ai/developers/debugging.md): 401. ⚠ Live: **400** `{"code": "invalid-argument", "error": "Incorrect API key provided…"}` | Invalid on 400 + «Incorrect API key» |

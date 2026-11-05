@@ -223,6 +223,19 @@ async def gemini_invalid() -> None:
         assert r.validity.value is Validity.invalid, name
 
 
+async def gemini_restricted() -> None:
+    for name, code in (
+        ("ip_restricted", "gemini_ip_restricted"),
+        ("referrer_restricted", "gemini_referrer_restricted"),
+        ("service_blocked", "gemini_service_blocked"),
+        ("service_disabled", "gemini_api_disabled"),
+    ):
+        r = await run(ProviderId.gemini, name)
+        assert r.overall is Overall.amber, name
+        assert code in codes(r), name
+        assert "permission_denied" not in codes(r), "the specific reason replaces the generic one"
+
+
 async def gemini_leaked() -> None:
     r = await run(ProviderId.gemini, "leaked")
     assert r.validity.value is Validity.blocked
@@ -315,6 +328,7 @@ CASES: dict[str, Callable[[], Any]] = {
     "openai-rate-limit": openai_rate_limit,
     "openai-missing-scopes": openai_missing_scopes,
     "gemini-invalid": gemini_invalid,
+    "gemini-restricted": gemini_restricted,
     "gemini-leaked": gemini_leaked,
     "gemini-prepay": gemini_prepay,
     "gemini-quota": gemini_quota,

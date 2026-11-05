@@ -70,7 +70,10 @@ def make_client(
     return httpx.AsyncClient(
         timeout=httpx.Timeout(settings.timeout_seconds),
         follow_redirects=False,
-        trust_env=False,  # no proxy or .netrc credentials from the environment
+        # trust_env honours HTTPS_PROXY/NO_PROXY and SSL_CERT_FILE/SSL_CERT_DIR (corporate
+        # proxies, custom CAs). httpx 0.28 never reads .netrc unless given NetRCAuth. The
+        # request hook still validates the *destination* host, proxy or not.
+        trust_env=True,
         headers={"user-agent": USER_AGENT, "accept": "application/json"},
         event_hooks={"request": [_guard(allowed)]},
         transport=transport,

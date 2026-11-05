@@ -1,7 +1,9 @@
 """Periodic passive checks inside ``mecha serve`` (a plain asyncio task, no extra deps).
 
-Every ``tick`` seconds it checks the credentials whose last observation is older than
-``interval_hours``. Concurrency and the per-credential minimum interval are enforced by
+Every ``tick`` seconds it checks the credentials that are due: ``interval_hours`` after
+a successful check, or with backoff after failures (min_interval, then double, capped at
+``interval_hours``), so a laptop waking up without network recovers in minutes.
+Concurrency and the per-credential minimum interval are enforced by
 :meth:`MechaService.check`. Only free passive endpoints are used.
 """
 
@@ -9,7 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from mecha.core.service import CredentialStatus, MechaService
 
@@ -20,15 +22,14 @@ class Scheduler:
     def __init__(self, service: MechaService, *, tick_seconds: float = 60.0) -> None:
         self.service = service
         self.tick_seconds = tick_seconds
-        self.interval = timedelta(hours=service.config.scheduler.interval_hours)
 
     def due(self, now: datetime) -> list[str]:
         out = []
         for cred in self.service.store.all():
             if not self.service.is_remote(cred):
                 continue
-            obs = self.service.store.last_observation(cred.id)
-            if obs is None or now - obs.observed_at >= self.interval:
+            due_at = self.service.next_due(cred)
+            if due_at is None or now >= due_at:
                 out.append(cred.id)
         return out
 

@@ -254,6 +254,21 @@ class Store:
         obs = json.loads(row["payload"]).get("observation")
         return Observation.model_validate(obs) if obs else None
 
+    def failure_streak(self, cred_id: str, limit: int = 32) -> int:
+        """How many of the latest checks failed in a row (grey, could not check)."""
+        rows = self.conn.execute(
+            "SELECT payload FROM check_results WHERE credential_id = ? "
+            "ORDER BY checked_at DESC, id DESC LIMIT ?",
+            (cred_id, limit),
+        ).fetchall()
+        streak = 0
+        for row in rows:
+            obs = json.loads(row["payload"]).get("observation") or {}
+            if obs.get("check_status") != "failed":
+                break
+            streak += 1
+        return streak
+
     def last_known(self, cred_id: str) -> tuple[Overall, datetime] | None:
         """The most recent non-grey result: what a grey card shows as last known state."""
         row = self.conn.execute(

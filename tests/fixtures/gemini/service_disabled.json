@@ -1,0 +1,22 @@
+{
+  "source": "https://cloud.google.com/docs/authentication/api-keys (API key restrictions) and the Google API error model (ErrorInfo.reason)",
+  "status": 403,
+  "headers": {},
+  "body": {
+    "error": {
+      "code": 403,
+      "message": "Generative Language API has not been used in project 000000000000 before or it is disabled.",
+      "status": "PERMISSION_DENIED",
+      "details": [
+        {
+          "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+          "reason": "SERVICE_DISABLED",
+          "domain": "googleapis.com",
+          "metadata": {
+            "service": "generativelanguage.googleapis.com"
+          }
+        }
+      ]
+    }
+  }
+}

@@ -21,6 +21,14 @@ INVALID_KEY_REASONS = frozenset({"API_KEY_INVALID"})
 # keys hit by the known account issue: a hint, not a diagnosis.
 R_AQ_HINT = "gemini_aq_rejected"
 DETAIL_ERROR_INFO = "type.googleapis.com/google.rpc.ErrorInfo"
+# 403 ErrorInfo.reason -> a specific amber reason. An IP-restricted key fails from a laptop
+# and works on its server: the card must say so instead of a generic "no permission".
+RESTRICTION_REASONS = {
+    "API_KEY_IP_ADDRESS_BLOCKED": "gemini_ip_restricted",
+    "API_KEY_HTTP_REFERRER_BLOCKED": "gemini_referrer_restricted",
+    "API_KEY_SERVICE_BLOCKED": "gemini_service_blocked",
+    "SERVICE_DISABLED": "gemini_api_disabled",
+}
 DETAIL_QUOTA_FAILURE = "type.googleapis.com/google.rpc.QuotaFailure"
 
 
@@ -63,7 +71,13 @@ def map_error(status: int, body: dict[str, Any] | None) -> Finding:
     if status == 402:
         return Finding(validity=Validity.valid, funds=FundsState.empty, error=err)
     if status == 403:
-        return Finding(error=err).amber(R_PERMISSION_DENIED)
+        specific = [
+            RESTRICTION_REASONS[r] for r in sorted(_reasons(details)) if r in RESTRICTION_REASONS
+        ]
+        finding = Finding(error=err)
+        for code in specific or [R_PERMISSION_DENIED]:
+            finding.amber(code)
+        return finding
     if status == 429:
         if contains(message, *PREPAY_DEPLETED):
             return Finding(validity=Validity.valid, funds=FundsState.empty, error=err)

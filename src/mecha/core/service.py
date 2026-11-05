@@ -257,9 +257,35 @@ class MechaService:
         return cred.kind in remote_kinds() and get_provider(cred.provider) is not None
 
     def is_fresh(self, cred: Credential, now: datetime) -> bool:
+        """A successful observation younger than the minimum interval (failures never count)."""
         obs = self.store.last_observation(cred.id)
         window = timedelta(minutes=self.config.scheduler.min_interval_minutes)
-        return obs is not None and now - obs.observed_at < window
+        return (
+            obs is not None
+            and obs.check_status is CheckStatus.ok
+            and now - obs.observed_at < window
+        )
+
+    def retry_delay(self, failures: int) -> timedelta:
+        """Backoff after ``failures`` failed checks in a row: min_interval, 2x, 4x… capped
+        at interval_hours. Without failures, the regular interval."""
+        sched = self.config.scheduler
+        interval = timedelta(hours=sched.interval_hours)
+        if failures <= 0:
+            return interval
+        base = timedelta(minutes=sched.min_interval_minutes)
+        delay: timedelta = base * (2 ** min(failures - 1, 30))
+        return min(delay, interval)
+
+    def next_due(self, cred: Credential) -> datetime | None:
+        """When the scheduler should check ``cred`` next (None: now)."""
+        obs = self.store.last_observation(cred.id)
+        if obs is None:
+            return None
+        failures = (
+            self.store.failure_streak(cred.id) if obs.check_status is not CheckStatus.ok else 0
+        )
+        return obs.observed_at + self.retry_delay(failures)
 
     async def _observe(self, cred: Credential, provider: Provider) -> Observation:
         now = self._now()

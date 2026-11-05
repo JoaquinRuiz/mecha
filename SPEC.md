@@ -186,6 +186,7 @@ Cada proveedor tiene su `errors.py` con este mapeo como funciones puras, probado
 | `openai-rate-limit` | OpenAI | 429 `rate_limit_exceeded` o `slow_down` | Límites `throttled` |
 | `openai-missing-scopes` | OpenAI | 401 con «Missing scopes» o «insufficient permissions» (clave restringida) | Ámbar «sin permiso», no inválida |
 | `gemini-invalid` | Gemini | 401 (variante: 400 `API_KEY_INVALID`) | Validez `invalid` |
+| `gemini-restricted` | Gemini | 403 con `ErrorInfo.reason` `API_KEY_IP_ADDRESS_BLOCKED`, `API_KEY_HTTP_REFERRER_BLOCKED`, `API_KEY_SERVICE_BLOCKED` o `SERVICE_DISABLED` | Ámbar con el motivo concreto («restringida a otras IP: puede funcionar en su servidor», etc.) en lugar del genérico «sin permiso» |
 | `gemini-leaked` | Gemini | «reported as leaked» | Validez `blocked` |
 | `gemini-prepay` | Gemini | 402 Payment Required (variante: 429 «prepayment credits are depleted») | Saldo `empty` |
 | `gemini-quota` | Gemini | 429 con `QuotaFailure` | Límites `throttled`; si el `quotaId` contiene `FreeTier`, plan gratuito como `inferred` |
@@ -272,7 +273,7 @@ La detección no está en el plugin: la resuelve el núcleo con `detect_patterns
 4. El motor de estados calcula el semáforo, guarda el resultado y lo emite por SSE.
 5. Si hay una clave de administración o gestión vinculada, su enriquecimiento se fusiona con `source: api`.
 
-Concurrencia: 4 comprobaciones a la vez en total y 2 por proveedor, con un intervalo mínimo de 5 minutos por credencial (también en `mecha check`, que reutiliza el último resultado, lo marca como «en caché» con su hora y admite `--force`). El planificador corre dentro de `mecha serve` y lanza comprobaciones pasivas cada 6 horas por defecto; para cron se usa `mecha check`.
+Concurrencia: 4 comprobaciones a la vez en total y 2 por proveedor, con un intervalo mínimo de 5 minutos por credencial (también en `mecha check`, que reutiliza el último resultado, lo marca como «en caché» con su hora y admite `--force`). El planificador corre dentro de `mecha serve` y lanza comprobaciones pasivas cada 6 horas por defecto; tras un fallo reintenta con backoff (el intervalo mínimo, el doble, y así hasta `interval_hours`), para que un portátil que despierta sin red no quede gris horas. Un resultado fallido nunca cuenta como «fresco». Para cron se usa `mecha check`.
 
 **Configuración.** `config.toml` en `MECHA_HOME`, validado con Pydantic y con aviso ante claves desconocidas: `[thresholds]` (`soon_days`, `low_funds_usd`), `[scheduler]` (`enabled`, `interval_hours`, `min_interval_minutes`, `concurrency`, `per_provider`), `[http]` (`timeout_seconds`, `retries`, `backoff_seconds`) y `[providers.anthropic]` (`version`). Las variables de entorno se reservan para rutas y secretos.
 
@@ -365,7 +366,7 @@ Mecha guarda secretos de alto valor, así que el diseño asume que cualquier web
 - **Sin vuelta atrás.** Tras el alta, el frontend solo ve `redacted` y `fingerprint`. En la v1 no existe «mostrar clave».
 - **Logs.** Un filtro de logging (instalado como factoría de `LogRecord`, cubre todos los loggers y el texto de las excepciones) sustituye cualquier coincidencia de los patrones de detección por su forma redactada, y httpx nunca registra cabeceras.
 - **Trazas.** Typer va con `pretty_exceptions_show_locals=False` y sin trazas de Rich: mostrarían las variables locales, secreto incluido. Los errores inesperados de la CLI se imprimen redactados y salen con 3.
-- **Salidas controladas.** Cada plugin declara su lista de hosts permitidos y el cliente HTTP rechaza cualquier otro destino.
+- **Salidas controladas.** Cada plugin declara su lista de hosts permitidos y el cliente HTTP rechaza cualquier otro destino, otro puerto, `http://` y las redirecciones. Respeta `HTTPS_PROXY`/`NO_PROXY` y `SSL_CERT_FILE`/`SSL_CERT_DIR` (proxy corporativo, CA propia): el guard valida el host de destino con o sin proxy, y httpx no lee `.netrc` sin `NetRCAuth` explícito.
 - **Ficheros vinculados.** Solo lectura; los tokens se leen en cada comprobación y nunca se copian.
 - **Copias.** `mecha export` produce un fichero cifrado con frase de paso; no hay export en claro.
 
@@ -489,6 +490,8 @@ Tarjetas, mecha, filtros, paleta ⌘K, panel de detalle, alta con detección en 
 
 Sondas activas, claves de administración y gestión con enriquecimiento, ficheros vinculados, importación de `.env`, OpenRouter y saldo estimado de OpenAI.
 
+
+Una caducidad que venga de una API (admin key, gestión de xAI, OpenRouter) se guarda como dato de la credencial, igual que la manual, y no solo dentro de la última observación: si el siguiente check falla, la clave que caduca mañana debe seguir en ámbar, no pasar a gris.
 - [ ] Una admin key de OpenAI rellena `expires_at` y `last_used_at` de las project keys guardadas.
 - [ ] Una clave de gestión de xAI muestra el saldo prepago en USD.
 - [ ] Un fichero de Codex vinculado muestra plan y fin de suscripción sin copiar tokens.
