@@ -31,7 +31,8 @@ function Ticker({ value }: { value: number }) {
   return <span ref={ref}>{value}</span>
 }
 
-const ORDER: Overall[] = ['green', 'amber', 'red', 'grey']
+// The four spec counters plus «local only», so the counters always add up to the total.
+const ORDER: Overall[] = ['green', 'amber', 'red', 'grey', 'local']
 
 export function Counters({
   counts,

@@ -377,7 +377,7 @@ La pantalla principal responde «¿qué está roto o va a romperse?» en menos d
 
 **Dashboard**
 
-- Cabecera con cuatro contadores (verde, ámbar, rojo, gris) animados con un number ticker, el botón «Comprobar todo» con progreso en vivo por SSE y la hora de la última comprobación global.
+- Cabecera con cinco contadores (verde, ámbar, rojo, gris y «solo local», para que siempre sumen el total) animados con un number ticker, el botón «Comprobar todo» con progreso en vivo por SSE y la hora de la última comprobación global.
 - Barra de filtros por proveedor, estado, tipo y etiqueta, con búsqueda. ⌘K abre una paleta de comandos (Command de shadcn/ui) para saltar a una clave o lanzar acciones; `N` abre el alta.
 - Rejilla de tarjetas con vista alternativa en tabla. Orden por defecto: rojo, ámbar, gris y verde, y dentro de cada grupo, lo que caduca antes.
 

@@ -66,11 +66,15 @@ test('demo badge, every state has text and an icon, not only colour', async ({ p
     await expect(pill).toHaveText(/\S/)
     await expect(pill.locator('svg')).toHaveCount(1)
   }
+  // The counters always add up to the total (five states, «local only» included).
+  let total = 0
   for (const state of ['green', 'amber', 'red', 'grey', 'local']) {
-    expect(
-      await page.locator(`[data-testid="credential-card"][data-overall="${state}"]`).count(),
-    ).toBeGreaterThan(0)
+    await expect(page.getByTestId(`counter-${state}`)).toBeVisible()
+    const n = await page.locator(`[data-testid="credential-card"][data-overall="${state}"]`).count()
+    expect(n).toBeGreaterThan(0)
+    total += n
   }
+  expect(total).toBe(20)
   expect(problems).toEqual([])
 })
 
@@ -137,6 +141,8 @@ test.describe('Spanish browser', () => {
     await expect(page.getByRole('button', { name: 'Comprobar todo' })).toBeVisible()
     await expect(page.getByTestId('counter-red')).toContainText('Roto')
     await expect(page.locator('[data-status="local"]').first()).toHaveText('Solo local')
+    await page.getByRole('button', { name: 'Leaked in a gist', exact: true }).click()
+    await expect(page.getByTestId('detail-sheet')).toContainText('Bloqueada')
     expect(problems).toEqual([])
   })
 })

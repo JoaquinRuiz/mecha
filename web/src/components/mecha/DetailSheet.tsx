@@ -181,7 +181,11 @@ export function DetailSheet({
                 <dl className="divide-y">
                   <SignalRow
                     label={t('signal.validity')}
-                    value={r.validity.value}
+                    value={
+                      i18n.has(`validity.${r.validity.value}`)
+                        ? t(`validity.${r.validity.value}` as MessageKey)
+                        : r.validity.value
+                    }
                     signal={r.validity}
                   />
                   <SignalRow

@@ -82,6 +82,12 @@ export const en = {
   'reason.gemini_project_invalid': 'Project invalid or deleted',
   'reason.gemini_org_policy_blocked': 'Blocked by an organization policy',
   'reason.gemini_iam_denied': 'Service account lacks permission',
+  'validity.valid': 'Valid',
+  'validity.invalid': 'Invalid',
+  'validity.revoked': 'Revoked',
+  'validity.blocked': 'Blocked',
+  'validity.not_applicable': 'Not applicable (local only)',
+  'validity.unknown': 'Unknown',
   lastKnown: 'Last {status} {when}',
   // fuse & card
   fuseNoDate: 'No known date',
