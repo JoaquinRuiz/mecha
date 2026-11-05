@@ -34,6 +34,10 @@ test:
     uv run pytest
     pnpm -C web test
 
+# Browser tests against the demo server (needs `just build-web` and Playwright browsers)
+e2e: build-web
+    pnpm -C web e2e
+
 # Lint, format check and type check
 lint:
     uv run ruff check .
@@ -55,6 +59,7 @@ secrets:
 
 # Everything CI runs
 ci: lint test build
+    pnpm -C web size
 
 # Build and serve the packaged frontend
 serve: build-web

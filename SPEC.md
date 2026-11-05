@@ -220,9 +220,9 @@ La línea discontinua es 127.0.0.1: lo único que la cruza hacia fuera es HTTPS 
 | Planificador | Tarea asyncio propia, sin dependencias extra |
 | Rutas de usuario | platformdirs |
 | Frontend | Vite + React 19 + TypeScript + Tailwind CSS v4 + shadcn/ui (primitivas Radix, las de por defecto) |
-| Datos en el frontend | TanStack Query, y EventSource para el progreso |
+| Datos en el frontend | TanStack Query, y `fetch` con streaming (`eventsource-parser`) para el progreso: `EventSource` no puede enviar la cabecera `Authorization` y el token en la URL acabaría en logs e historial |
 | Tablas y gráficos | TanStack Table y los charts de shadcn/ui (Recharts) |
-| Iconos, animación y avisos | lucide-react, Motion (con moderación) y sonner |
+| Iconos, animación y avisos | lucide-react, Motion (con moderación) y avisos propios sobre Radix Toast (Sonner inyecta su CSS sin nonce) |
 
 **Estructura del repo**
 
@@ -344,7 +344,7 @@ El historial guarda un `CheckResult` por fila y conserva los últimos 500 por cr
 | GET | `/api/providers` | Matriz de capacidades, para que la UI sepa qué prometer |
 | POST | `/api/import/env` | Importa el contenido de un `.env` pegado o subido |
 | POST | `/api/linked` | Vincula un fichero de sesión OAuth por ruta |
-| GET | `/api/events` | SSE con el progreso de las comprobaciones |
+| GET | `/api/events` | Flujo de eventos (formato SSE, leído con `fetch`) que solo dice qué cambió; la UI recarga por REST, y al reconectar lo recarga todo (sin `Last-Event-ID`). Keepalive cada 15 s; los flujos se cierran al apagar para que Ctrl+C no se cuelgue |
 | GET | `/api/health` | Estado del servidor |
 
 Los errores tienen la forma `{code, message}` y nunca incluyen el secreto ni cabeceras de autorización.
@@ -362,7 +362,8 @@ Mecha guarda secretos de alto valor, así que el diseño asume que cualquier web
 - **Disco.** La base de datos está en el directorio de datos de usuario (platformdirs, o `MECHA_HOME`) con permisos 0600 y directorio 0700. El proceso fija `umask 077` antes de abrir SQLite para que `-wal`, `-shm` y `-journal` nazcan con 0600; `secure_delete` está activo. En Windows los permisos POSIX son lo mejor posible. Ningún secreto queda en claro en disco, logs ni historial.
 - **Solo localhost.** El servidor escucha en 127.0.0.1 y rechaza cualquier cabecera `Host` distinta de `127.0.0.1:<puerto>` o `localhost:<puerto>`, contra DNS rebinding.
 - **Token de sesión.** Cada arranque genera un token aleatorio y la CLI abre `http://127.0.0.1:7878/#t=<token>`. El frontend lo lee del fragmento, lo borra de la barra de direcciones y lo envía en `Authorization`. Sin token, 401; sin CORS.
-- **CSP estricta.** El HTML servido no carga nada de terceros: fuentes e iconos van empaquetados.
+- **CSP estricta.** El HTML servido no carga nada de terceros: fuentes e iconos van empaquetados. Los estilos que inyectan Radix, Motion o los gráficos se autorizan con un nonce distinto en cada respuesta de `index.html` (servido con `no-store`), nunca con `'unsafe-inline'`; `frame-ancestors 'none'`, `base-uri 'none'` y `form-action 'self'` van explícitos porque no heredan de `default-src` (ADR 0001).
+- **Peticiones.** Cuerpos de más de 64 KiB se rechazan (413) sin leerlos; el secreto admite como mucho 8 KiB. Los 422 nunca devuelven el input, ni siquiera los nombres de campo sin redactar.
 - **Sin vuelta atrás.** Tras el alta, el frontend solo ve `redacted` y `fingerprint`. En la v1 no existe «mostrar clave».
 - **Logs.** Un filtro de logging (instalado como factoría de `LogRecord`, cubre todos los loggers y el texto de las excepciones) sustituye cualquier coincidencia de los patrones de detección por su forma redactada, y httpx nunca registra cabeceras.
 - **Trazas.** Typer va con `pretty_exceptions_show_locals=False` y sin trazas de Rich: mostrarían las variables locales, secreto incluido. Los errores inesperados de la CLI se imprimen redactados y salen con 3.
@@ -406,7 +407,8 @@ La pantalla principal responde «¿qué está roto o va a romperse?» en menos d
 
 - Al pegar el secreto, `/api/detect` muestra al instante proveedor, tipo y qué se podrá saber de él («validez: sí · saldo: no · caducidad: con admin key»).
 - Un formato no confirmado en la documentación oficial (`verified = false`, como `AQ.` o `AIza`) es una etiqueta discreta en `detect`, en `--json` y en el panel de detalle, nunca un aviso en cada alta. El alta solo avisa cuando Mecha cambia lo que hace por el patrón (no guarda un refresh token, pide confirmar el proveedor, remite a `mecha link`).
-- Campos: etiqueta, etiquetas, caducidad o presupuesto manual y casilla de sonda activa con su coste estimado.
+- Campos: etiqueta, etiquetas, caducidad o presupuesto manual y casilla de sonda activa con su coste estimado (presupuesto y sonda, en la Fase 4).
+- El campo del secreto lleva `spellcheck=false` y `autocomplete=off` (los correctores mejorados de Chrome y Edge envían el texto a sus servidores). La detección en vivo es una mutación con debounce, sin caché: nunca un `useQuery` con el secreto en la clave, que quedaría en la caché y en las devtools. Al cerrar el diálogo se borra todo el estado.
 - Pestañas alternativas para importar un `.env` o vincular un fichero de sesión; si existen las rutas por defecto, se ofrecen directamente.
 
 **Estilo**
@@ -415,7 +417,7 @@ La pantalla principal responde «¿qué está roto o va a romperse?» en menos d
 - Geist Sans y Geist Mono, empaquetadas; un único color de acento (el ámbar de una mecha encendida) y los colores de estado reservados para el estado.
 - Contraste AA, foco visible y uso completo con teclado.
 - Textos en español e inglés según el idioma del navegador.
-- Modo demo (`mecha serve --demo`) con datos falsos, para capturas, el README y vídeos.
+- Modo demo (`mecha serve --demo`) con datos falsos, para capturas, el README y vídeos: sin secretos (solo formas redactadas y resultados fabricados), determinista (semilla y «ahora» fijos), con cada estado del semáforo y cada tipo de credencial, sin red, con el alta desactivada y una insignia «Demo» visible.
 
 ## CLI
 
