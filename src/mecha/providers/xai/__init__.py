@@ -6,19 +6,29 @@ from __future__ import annotations
 import httpx
 
 from mecha.core.http import Route
-from mecha.core.models import Credential, CredentialKind, ProviderId, Validity
+from mecha.core.models import Credential, CredentialKind, Funds, ProviderError, ProviderId, Validity
 from mecha.core.status import Observation
 from mecha.providers.base import (
+    ChildRef,
+    Enrichment,
     Finding,
+    KeyUpdate,
     ProviderContext,
     json_body,
     observation,
     probe_misconfigured,
     probe_observation,
+    read_json,
     request,
     trace,
 )
-from mecha.providers.xai.errors import map_api_key_info, map_error, map_management_validation
+from mecha.providers.xai.errors import (
+    map_api_key_info,
+    map_error,
+    map_management_key_item,
+    map_management_validation,
+    team_balance,
+)
 
 API = "https://api.x.ai"
 MANAGEMENT = "https://management-api.x.ai"
@@ -129,6 +139,80 @@ class XAIProvider:
         return probe_observation(
             finding, now=ctx.now, http=http_trace, limits=None, model=model, paid=True
         )
+
+    async def enrich(
+        self,
+        admin: Credential,
+        secret: str,
+        children: list[ChildRef],
+        http: httpx.AsyncClient,
+        ctx: ProviderContext,
+    ) -> Enrichment:
+        """Team keys (expireTime, disabled) matched by api_key_id, and the team balance:
+        prepaid credit plus the margin left under the postpaid monthly limit. The API stops
+        only when both are used up (docs: postpaid spending limits)."""
+        headers = {"authorization": f"Bearer {secret}"}
+        out = Enrichment()
+        validation = await read_json(
+            http, ctx, MANAGEMENT + "/auth/management-keys/validation", headers
+        )
+        if isinstance(validation, ProviderError):
+            out.error = validation
+            return out
+        team = str(validation.get("scopeId") or validation.get("teamId") or "")
+        if not team:
+            out.error = ProviderError(code="no_team", message="Management key has no team scope.")
+            return out
+        out.own.account["team_id"] = team
+        by_key_id = {
+            c.account.get("api_key_id"): c.credential.id
+            for c in children
+            if c.account.get("api_key_id")
+        }
+        in_team = [c.credential.id for c in children if c.account.get("team_id") == team]
+
+        keys = await read_json(http, ctx, f"{MANAGEMENT}/auth/teams/{team}/api-keys", headers)
+        if isinstance(keys, ProviderError):
+            out.error = keys
+        else:
+            for item in keys.get("apiKeys") or []:
+                cid = (
+                    by_key_id.get(str(item.get("apiKeyId", ""))) if isinstance(item, dict) else None
+                )
+                if cid is None:
+                    continue
+                f = map_management_key_item(item, ctx.now)
+                update = out.children.setdefault(cid, KeyUpdate())
+                update.expires_at = f.expires_at
+                if f.validity is Validity.blocked:
+                    update.status = Validity.blocked
+
+        funds = await self._team_funds(team, http, ctx, headers)
+        if isinstance(funds, ProviderError):
+            out.error = out.error or funds
+            return out
+        balance, account = funds
+        out.own.funds, out.own.funds_scope = balance, "team"
+        out.own.account.update(account)
+        for cid in in_team:  # a real API figure: if the team runs dry, all its keys stop
+            update = out.children.setdefault(cid, KeyUpdate())
+            update.funds, update.funds_scope = balance, "team"
+        return out
+
+    async def _team_funds(
+        self, team: str, http: httpx.AsyncClient, ctx: ProviderContext, headers: dict[str, str]
+    ) -> tuple[Funds, dict[str, str]] | ProviderError:
+        base = f"{MANAGEMENT}/v1/billing/teams/{team}"
+        prepaid = await read_json(http, ctx, base + "/prepaid/balance", headers)
+        if isinstance(prepaid, ProviderError):
+            return prepaid
+        limits = await read_json(http, ctx, base + "/postpaid/spending-limits", headers)
+        if isinstance(limits, ProviderError):
+            return limits
+        invoice = await read_json(http, ctx, base + "/postpaid/invoice/preview", headers)
+        if isinstance(invoice, ProviderError):
+            return invoice
+        return team_balance(prepaid, limits, invoice, ctx.low_funds_usd)
 
 
 PROVIDER = XAIProvider()

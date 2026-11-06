@@ -9,6 +9,8 @@ from mecha.core.http import Route
 from mecha.core.models import Credential, CredentialKind, ProviderId, Validity
 from mecha.core.status import Observation
 from mecha.providers.base import (
+    ChildRef,
+    Enrichment,
     Finding,
     ProviderContext,
     json_body,
@@ -117,6 +119,16 @@ class GeminiProvider:
         return probe_observation(
             finding, now=ctx.now, http=http_trace, limits=None, model=model, paid=not ctx.probe_free
         )
+
+    async def enrich(
+        self,
+        admin: Credential,
+        secret: str,
+        children: list[ChildRef],
+        http: httpx.AsyncClient,
+        ctx: ProviderContext,
+    ) -> Enrichment:
+        return Enrichment()  # Gemini has no admin/management keys
 
 
 PROVIDER = GeminiProvider()

@@ -26,19 +26,22 @@ from mecha.core.models import (
     CheckResult,
     CheckStatus,
     Credential,
+    CredentialFacts,
     CredentialKind,
     Fact,
     Funds,
+    FundsInfo,
     Limits,
     Overall,
     ProviderError,
     ProviderId,
+    Validity,
 )
 from mecha.core.normalize import normalize_secret
 from mecha.core.status import Observation, Thresholds, evaluate
 from mecha.core.ulid import new_ulid
 from mecha.providers import get_provider
-from mecha.providers.base import Provider, ProviderContext, remote_kinds
+from mecha.providers.base import ChildRef, KeyUpdate, Provider, ProviderContext, remote_kinds
 from mecha.store.db import Store
 
 log = logging.getLogger(__name__)
@@ -75,6 +78,43 @@ class CredentialStatus:
     cached: bool = False  # result reused because of the minimum interval
     # An active probe was asked for but the one-per-hour limit applies until this time.
     probe_next_at: datetime | None = None
+
+
+ENRICHING_KINDS = frozenset({CredentialKind.admin_key, CredentialKind.management_key})
+
+
+def apply_update(
+    facts: CredentialFacts, update: KeyUpdate, now: datetime, *, by: str | None
+) -> CredentialFacts:
+    """Merge what an API reported into the stored facts (each with source and date)."""
+    out = facts.model_copy(deep=True)
+    if update.status is not None:
+        out.status = Fact[Validity](value=update.status, source="api", observed_at=now, by=by)
+    elif out.status is not None and out.status.by == by:
+        out.status = None  # the same reporter no longer flags it
+    if update.expires_at is not None or update.never_expires:
+        out.expires_at = Fact[datetime | None](
+            value=update.expires_at, source="api", observed_at=now, by=by
+        )
+    if update.last_used_at is not None:
+        out.last_used_at = Fact[datetime](
+            value=update.last_used_at, source="api", observed_at=now, by=by
+        )
+    if update.funds is not None:
+        out.funds = Fact[Funds](
+            value=update.funds,
+            source=update.funds_source,
+            observed_at=now,
+            by=by,
+            scope=update.funds_scope,
+        )
+    if update.funds_info is not None:
+        out.funds_info = Fact[FundsInfo](
+            value=update.funds_info, source="inferred", observed_at=now, by=by, scope="organization"
+        )
+    for key, value in update.account.items():
+        out.account[key] = Fact[str](value=value, source="api", observed_at=now, by=by)
+    return out
 
 
 def _clean_tags(tags: Iterable[str]) -> list[str]:
@@ -390,9 +430,59 @@ class MechaService:
         obs = await self._observe(cred, provider, active=probe)
         if probe:
             cred = self._save_probe_facts(cred, obs)
+        if cred.kind in ENRICHING_KINDS and obs.check_status is CheckStatus.ok:
+            cred = await self._enrich(cred, provider) or cred
         result = evaluate(cred, obs, self._now(), self.thresholds)
         self.store.add_result(result, obs)
         return self._status(cred)
+
+    # --- enrichment -----------------------------------------------------------------
+    async def _enrich(self, admin: Credential, provider: Provider) -> Credential | None:
+        """Let an admin/management key describe the stored keys of its provider. Child
+        secrets are decrypted in memory only to match hints; nothing else leaves."""
+        secret = self.store.secret(admin.id)
+        if secret is None:
+            return None
+        children = []
+        for cred in self.store.all():
+            if cred.provider is not admin.provider or cred.kind is not CredentialKind.api_key:
+                continue
+            obs = self.store.last_observation(cred.id)
+            account = dict(obs.account) if obs and obs.check_status is CheckStatus.ok else {}
+            account.update({k: f.value for k, f in cred.facts.account.items()})
+            children.append(ChildRef(cred, self.store.secret(cred.id), account))
+        ctx = ProviderContext(
+            now=self._now(),
+            http=self._settings(),
+            anthropic_version=self.config.providers.anthropic.version,
+            low_funds_usd=self.config.thresholds.low_funds_usd,
+        )
+        try:
+            async with (
+                self._global,
+                self._semaphore(admin.provider),
+                make_client(provider.routes(admin.kind), self._settings()) as http,
+            ):
+                enrichment = await provider.enrich(admin, secret, children, http, ctx)
+        except Exception as exc:  # a plugin bug must not break the admin key's own check
+            log.warning("enrichment by %s failed: %s", admin.provider.value, type(exc).__name__)
+            log.debug("enrichment failure", exc_info=True)
+            return None
+        finally:
+            del secret, children
+        if enrichment.error is not None:
+            log.info("enrichment partial: %s", enrichment.error.code)
+        if enrichment.ambiguous:
+            log.info("%d hint(s) matched several stored keys: not enriched", enrichment.ambiguous)
+        now = self._now()
+        for cid, update in enrichment.children.items():
+            child = self.store.get(cid)
+            if child is not None:
+                self.store.set_facts(cid, apply_update(child.facts, update, now, by=admin.id))
+                self.store.set_parent(cid, admin.id)
+        facts = apply_update(admin.facts, enrichment.own, now, by=None)
+        self.store.set_facts(admin.id, facts)
+        return admin.model_copy(update={"facts": facts})
 
     async def check(
         self,

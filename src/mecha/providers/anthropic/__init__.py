@@ -2,25 +2,40 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 import httpx
 
+from mecha.core.hints import ambiguous_hints, match_unique
 from mecha.core.http import Route
-from mecha.core.models import Credential, CredentialKind, ProviderId, Validity
+from mecha.core.models import (
+    Credential,
+    CredentialKind,
+    ExpiryState,
+    ProviderError,
+    ProviderId,
+    Validity,
+)
 from mecha.core.status import Observation
-from mecha.providers.anthropic.errors import map_error
+from mecha.providers.anthropic.errors import map_admin_key_status, map_error
 from mecha.providers.base import (
+    ChildRef,
+    Enrichment,
     Finding,
+    KeyUpdate,
     ProviderContext,
     json_body,
     observation,
     parse_rate_limits,
     probe_misconfigured,
     probe_observation,
+    read_json,
     request,
     trace,
 )
 
 BASE = "https://api.anthropic.com"
+MAX_PAGES = 50  # safety cap on pagination
 PROBE_DEFAULT = "claude-haiku-5-5"  # fallback when the model list has no haiku line
 
 
@@ -34,6 +49,16 @@ ROUTES: dict[CredentialKind, tuple[Route, ...]] = {
     # An admin key could create or archive keys: verified reads only.
     CredentialKind.admin_key: (Route("GET", HOST, "/v1/organizations/api_keys"),),
 }
+
+
+def _iso(value: object) -> datetime | None:
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
 
 
 class AnthropicProvider:
@@ -133,6 +158,55 @@ class AnthropicProvider:
             model=model,
             paid=not ctx.probe_free,
         )
+
+    async def enrich(
+        self,
+        admin: Credential,
+        secret: str,
+        children: list[ChildRef],
+        http: httpx.AsyncClient,
+        ctx: ProviderContext,
+    ) -> Enrichment:
+        """GET /v1/organizations/api_keys (paginated): status and expires_at of stored keys,
+        matched by partial_key_hint against the decrypted secrets."""
+        headers = {"x-api-key": secret, "anthropic-version": ctx.anthropic_version}
+        secrets = {c.credential.id: c.secret for c in children if c.secret}
+        out = Enrichment()
+        after: str | None = None
+        for _ in range(MAX_PAGES):
+            params: dict[str, str | int] = {"limit": 1000}
+            if after:
+                params["after_id"] = after
+            page = await read_json(http, ctx, BASE + "/v1/organizations/api_keys", headers, params)
+            if isinstance(page, ProviderError):
+                out.error = page
+                break
+            for item in page.get("data") or []:
+                hint = item.get("partial_key_hint") if isinstance(item, dict) else None
+                if not hint:
+                    continue
+                if ambiguous_hints([hint], secrets):
+                    out.ambiguous += 1
+                    continue
+                cid = match_unique(hint, secrets)
+                if cid is None:
+                    continue
+                update = KeyUpdate()
+                status = map_admin_key_status(str(item.get("status", "")))
+                if status.validity in (Validity.blocked, Validity.revoked):
+                    update.status = status.validity
+                elif status.expiry is ExpiryState.expired:
+                    update.status = Validity.invalid
+                expires = _iso(item.get("expires_at"))
+                if expires is not None:
+                    update.expires_at = expires
+                elif "expires_at" in item and item["expires_at"] is None:
+                    update.never_expires = True
+                out.children[cid] = update
+            if not page.get("has_more") or not page.get("last_id"):
+                break
+            after = str(page["last_id"])
+        return out
 
 
 PROVIDER = AnthropicProvider()

@@ -230,6 +230,9 @@ class Store:
         {"label", "tags", "notes", "manual_expires_at", "active_probe", "manual_budget"}
     )
 
+    def set_parent(self, cred_id: str, parent_id: str | None) -> None:
+        self.conn.execute("UPDATE credentials SET parent_id = ? WHERE id = ?", (parent_id, cred_id))
+
     def set_facts(self, cred_id: str, facts: CredentialFacts) -> None:
         self.conn.execute(
             "UPDATE credentials SET facts = ? WHERE id = ?", (facts.model_dump_json(), cred_id)

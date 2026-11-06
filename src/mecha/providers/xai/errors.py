@@ -7,9 +7,10 @@ Docs (checked 2026-11-04): https://docs.x.ai/developers/rest-api-reference/infer
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from decimal import Decimal
 from typing import Any
 
-from mecha.core.models import ExpiryState, LimitsState, Validity
+from mecha.core.models import ExpiryState, Funds, FundsState, LimitsState, Validity
 from mecha.core.status import R_PERMISSION_DENIED
 from mecha.providers.base import Finding, contains, provider_error, unexpected
 
@@ -95,3 +96,49 @@ def map_error(status: int, body: dict[str, Any] | None) -> Finding:
     if status == 429:
         return Finding(validity=Validity.valid, limits=LimitsState.throttled, error=err_obj)
     return unexpected(status, body)
+
+
+def _cents(obj: object) -> int | None:
+    """xAI amounts: {"val": "<USD cents>"} objects or plain strings."""
+    raw = obj.get("val") if isinstance(obj, dict) else obj
+    try:
+        return int(str(raw)) if raw is not None else None
+    except ValueError:
+        return None
+
+
+def team_balance(
+    prepaid: dict[str, Any],
+    limits: dict[str, Any],
+    invoice: dict[str, Any],
+    low_usd: Decimal,
+) -> tuple[Funds, dict[str, str]]:
+    """Prepaid credit + margin under the postpaid monthly spending limit.
+
+    Prepaid ``total.val`` is negative when credit is available (purchases are negative
+    changes, spend positive; the docs example shows -1000 after buying 10 USD), so the
+    balance is ``-total``. Postpaid: ``effectiveSl`` (soft limit actually applied) minus the
+    current cycle's ``amountBeforeVat``. Red only when neither prepaid nor margin is left.
+    """
+    prepaid_cents = max(0, -(_cents(prepaid.get("total")) or 0))
+    raw_sl = limits.get("spendingLimits")
+    sl: dict[str, Any] = raw_sl if isinstance(raw_sl, dict) else {}
+    limit_cents = (
+        _cents(sl.get("effectiveSl")) or _cents(invoice.get("effectiveSpendingLimit")) or 0
+    )
+    raw_core = invoice.get("coreInvoice")
+    core: dict[str, Any] = raw_core if isinstance(raw_core, dict) else {}
+    used_cents = max(0, _cents(core.get("amountBeforeVat")) or 0)
+    margin_cents = max(0, limit_cents - used_cents)
+    available = Decimal(prepaid_cents + margin_cents) / 100
+    if available <= 0:
+        state = FundsState.empty
+    elif available < low_usd:
+        state = FundsState.low
+    else:
+        state = FundsState.ok
+    account = {
+        "prepaid_usd": f"{Decimal(prepaid_cents) / 100:.2f}",
+        "postpaid_margin_usd": f"{Decimal(margin_cents) / 100:.2f}",
+    }
+    return Funds(state=state, amount=available, currency="USD"), account
