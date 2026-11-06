@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import httpx
 
+from mecha.core.http import Route
 from mecha.core.models import Credential, CredentialKind, ProviderId
 from mecha.core.status import Observation
 from mecha.providers.base import ProviderContext, json_body, observation, request, trace
@@ -14,9 +15,33 @@ API = "https://api.x.ai"
 MANAGEMENT = "https://management-api.x.ai"
 
 
+API_HOST = "api.x.ai"
+MGMT_HOST = "management-api.x.ai"
+ID = r"[A-Za-z0-9_.\-]+"
+ROUTES: dict[CredentialKind, tuple[Route, ...]] = {
+    # A normal key never reaches the management API...
+    CredentialKind.api_key: (
+        Route("GET", API_HOST, "/v1/api-key"),
+        Route("POST", API_HOST, "/v1/chat/completions"),  # active probe, minimal
+    ),
+    # ...and a management key (which could create or delete keys) only reaches it, for the
+    # verified reads.
+    CredentialKind.management_key: (
+        Route("GET", MGMT_HOST, "/auth/management-keys/validation"),
+        Route("GET", MGMT_HOST, f"/auth/teams/{ID}/api-keys"),
+        Route("GET", MGMT_HOST, f"/v1/billing/teams/{ID}/prepaid/balance"),
+        Route("GET", MGMT_HOST, f"/v1/billing/teams/{ID}/postpaid/spending-limits"),
+        Route("GET", MGMT_HOST, f"/v1/billing/teams/{ID}/postpaid/invoice/preview"),
+    ),
+}
+
+
 class XAIProvider:
     id = ProviderId.xai
-    allowed_hosts = frozenset({"api.x.ai", "management-api.x.ai"})
+    allowed_hosts = frozenset({API_HOST, MGMT_HOST})
+
+    def routes(self, kind: CredentialKind) -> tuple[Route, ...]:
+        return ROUTES.get(kind, ())
 
     def endpoint(self, kind: CredentialKind) -> tuple[str, str, dict[str, str | int]]:
         if kind is CredentialKind.management_key:

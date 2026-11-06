@@ -307,7 +307,7 @@ class MechaService:
             async with (
                 self._global,
                 self._semaphore(cred.provider),
-                make_client(provider.allowed_hosts, self._settings()) as http,
+                make_client(provider.routes(cred.kind), self._settings()) as http,
             ):
                 return await provider.check_passive(cred, secret, http, ctx)
         except Exception as exc:  # a plugin bug must not take the whole batch down

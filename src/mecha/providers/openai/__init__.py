@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import httpx
 
+from mecha.core.http import Route
 from mecha.core.models import Credential, CredentialKind, ProviderId, Validity
 from mecha.core.status import Observation
 from mecha.providers.base import (
@@ -23,9 +24,29 @@ from mecha.providers.openai.errors import map_error
 BASE = "https://api.openai.com"
 
 
+HOST = "api.openai.com"
+ID = r"[A-Za-z0-9_.\-]+"
+ROUTES: dict[CredentialKind, tuple[Route, ...]] = {
+    CredentialKind.api_key: (
+        Route("GET", HOST, "/v1/models"),
+        Route("POST", HOST, "/v1/embeddings"),  # active probe, one word
+    ),
+    # An admin key could create or delete keys and projects: verified reads only.
+    CredentialKind.admin_key: (
+        Route("GET", HOST, "/v1/organization/admin_api_keys"),
+        Route("GET", HOST, "/v1/organization/projects"),
+        Route("GET", HOST, f"/v1/organization/projects/{ID}/api_keys"),
+        Route("GET", HOST, "/v1/organization/costs"),
+    ),
+}
+
+
 class OpenAIProvider:
     id = ProviderId.openai
-    allowed_hosts = frozenset({"api.openai.com"})
+    allowed_hosts = frozenset({HOST})
+
+    def routes(self, kind: CredentialKind) -> tuple[Route, ...]:
+        return ROUTES.get(kind, ())
 
     def endpoint(self, kind: CredentialKind) -> tuple[str, str, dict[str, str | int]]:
         if kind is CredentialKind.admin_key:

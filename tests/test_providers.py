@@ -34,7 +34,7 @@ async def call(
         route = router.get(url__startswith=url).mock(
             return_value=httpx.Response(fx["status"], json=fx["body"], headers=fx["headers"])
         )
-        async with make_client(plugin.allowed_hosts, FAST) as http:
+        async with make_client(plugin.routes(kind), FAST) as http:
             c = cred(provider, kind)
             ctx = ProviderContext(now=NOW, http=FAST, anthropic_version=version)
             obs = await plugin.check_passive(c, SECRET, http, ctx)
@@ -133,7 +133,7 @@ async def test_gemini_aiza_stays_amber_when_valid() -> None:
         router.route(host="generativelanguage.googleapis.com").mock(
             return_value=httpx.Response(200, json=fx["body"])
         )
-        async with make_client(plugin.allowed_hosts, FAST) as http:
+        async with make_client(plugin.routes(c.kind), FAST) as http:
             obs = await plugin.check_passive(c, SECRET, http, ProviderContext(now=NOW, http=FAST))
     r = evaluate(c, obs, NOW)
     assert r.validity.value is Validity.valid
@@ -168,7 +168,7 @@ async def test_non_json_success_is_grey() -> None:
     assert plugin is not None
     with respx.mock as router:
         router.route(host="api.x.ai").mock(return_value=httpx.Response(200, text="<html>"))
-        async with make_client(plugin.allowed_hosts, FAST) as http:
+        async with make_client(plugin.routes(CredentialKind.api_key), FAST) as http:
             obs = await plugin.check_passive(
                 cred(ProviderId.xai), SECRET, http, ProviderContext(now=NOW, http=FAST)
             )
@@ -186,7 +186,7 @@ async def test_provider_messages_are_scrubbed() -> None:
     }
     with respx.mock as router:
         router.route(host="api.anthropic.com").mock(return_value=httpx.Response(401, json=body))
-        async with make_client(plugin.allowed_hosts, FAST) as http:
+        async with make_client(plugin.routes(CredentialKind.api_key), FAST) as http:
             obs = await plugin.check_passive(
                 cred(ProviderId.anthropic), SECRET, http, ProviderContext(now=NOW, http=FAST)
             )

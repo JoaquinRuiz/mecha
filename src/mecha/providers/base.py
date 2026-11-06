@@ -15,7 +15,14 @@ from typing import Any, Protocol
 
 import httpx
 
-from mecha.core.http import DisallowedRequestError, Exchange, HttpSettings, NetworkError, send
+from mecha.core.http import (
+    DisallowedRequestError,
+    Exchange,
+    HttpSettings,
+    NetworkError,
+    Route,
+    send,
+)
 from mecha.core.models import (
     CheckStatus,
     Credential,
@@ -61,6 +68,10 @@ class Provider(Protocol):
 
     def endpoint(self, kind: CredentialKind) -> tuple[str, str, dict[str, str | int]]:
         """Free passive endpoint for ``kind``: (base URL, path, query params)."""
+        ...
+
+    def routes(self, kind: CredentialKind) -> tuple[Route, ...]:
+        """The closed list of method + host + path this credential kind may request."""
         ...
 
     async def check_passive(

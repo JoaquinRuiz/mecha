@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import httpx
 
+from mecha.core.http import Route
 from mecha.core.models import Credential, CredentialKind, ProviderId, Validity
 from mecha.core.status import Observation
 from mecha.providers.base import Finding, ProviderContext, json_body, observation, request, trace
@@ -13,9 +14,23 @@ from mecha.providers.gemini.errors import map_error
 BASE = "https://generativelanguage.googleapis.com"
 
 
+HOST = "generativelanguage.googleapis.com"
+MODEL = r"[A-Za-z0-9_.\-]+"
+ROUTES: dict[CredentialKind, tuple[Route, ...]] = {
+    CredentialKind.api_key: (
+        Route("GET", HOST, "/v1beta/models"),
+        Route("POST", HOST, f"/v1beta/models/{MODEL}:generateContent"),  # active probe
+        Route("POST", HOST, f"/v1beta/models/{MODEL}:countTokens"),  # free probe (opt-in)
+    ),
+}
+
+
 class GeminiProvider:
     id = ProviderId.gemini
-    allowed_hosts = frozenset({"generativelanguage.googleapis.com"})
+    allowed_hosts = frozenset({HOST})
+
+    def routes(self, kind: CredentialKind) -> tuple[Route, ...]:
+        return ROUTES.get(kind, ())
 
     def endpoint(self, kind: CredentialKind) -> tuple[str, str, dict[str, str | int]]:
         return BASE, "/v1beta/models", {"pageSize": 1000}  # docs: at most 1000 per page

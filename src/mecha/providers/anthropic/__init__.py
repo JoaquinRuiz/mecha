@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import httpx
 
+from mecha.core.http import Route
 from mecha.core.models import Credential, CredentialKind, ProviderId, Validity
 from mecha.core.status import Observation
 from mecha.providers.anthropic.errors import map_error
@@ -20,9 +21,24 @@ from mecha.providers.base import (
 BASE = "https://api.anthropic.com"
 
 
+HOST = "api.anthropic.com"
+ROUTES: dict[CredentialKind, tuple[Route, ...]] = {
+    CredentialKind.api_key: (
+        Route("GET", HOST, "/v1/models"),
+        Route("POST", HOST, "/v1/messages"),  # active probe, max_tokens 1
+        Route("POST", HOST, "/v1/messages/count_tokens"),  # free probe (opt-in)
+    ),
+    # An admin key could create or archive keys: verified reads only.
+    CredentialKind.admin_key: (Route("GET", HOST, "/v1/organizations/api_keys"),),
+}
+
+
 class AnthropicProvider:
     id = ProviderId.anthropic
-    allowed_hosts = frozenset({"api.anthropic.com"})
+    allowed_hosts = frozenset({HOST})
+
+    def routes(self, kind: CredentialKind) -> tuple[Route, ...]:
+        return ROUTES.get(kind, ())
 
     def endpoint(self, kind: CredentialKind) -> tuple[str, str, dict[str, str | int]]:
         if kind is CredentialKind.admin_key:
