@@ -326,6 +326,20 @@ def openrouter_empty() -> None:
     assert r.overall is Overall.red
 
 
+async def probe_404() -> None:
+    from tests.test_check import Clock
+    from tests.test_probes import test_missing_probe_model_is_misconfigured_not_invalid
+
+    await test_missing_probe_model_is_misconfigured_not_invalid(Clock())
+
+
+async def probe_timeout() -> None:
+    from tests.test_check import Clock
+    from tests.test_probes import test_probe_timeout_is_uncertain_and_never_resent
+
+    await test_probe_timeout_is_uncertain_and_never_resent(Clock())
+
+
 CASES: dict[str, Callable[[], Any]] = {
     "all-401": all_401,
     "all-403": all_403,
@@ -348,6 +362,8 @@ CASES: dict[str, Callable[[], Any]] = {
     "xai-flags": xai_flags,
     "xai-mgmt-expired": xai_mgmt_expired,
     "openrouter-empty": openrouter_empty,
+    "probe-404": probe_404,
+    "probe-timeout": probe_timeout,
 }
 
 

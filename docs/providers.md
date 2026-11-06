@@ -62,6 +62,22 @@ contradict the docs are marked ⚠.
 | xAI | Out of credit error text | «por verificar» | Not documented | No mapping (`unknown`) |
 | xAI | Billing reads method | «verificar» | Phase 4 | — |
 
+## Phase 4 (checked 2026-11-06)
+
+| Provider | Item | Spec said | Docs say | Mecha does |
+| --- | --- | --- | --- | --- |
+| Anthropic | `count_tokens` as default probe | «verificar si devuelve el error de saldo» | [Token counting](https://platform.claude.com/docs/en/build-with-claude/token-counting): free, own rate limit. Whether it returns the credit error is **not documented** | Paid `messages` (max_tokens 1) by default; free probe opt-in (`[probes] free = true`) |
+| Gemini | `countTokens` reflects depleted prepay | «verificar» | Not documented | Paid `generateContent` (maxOutputTokens 1) by default; free probe opt-in |
+| OpenAI | Admin reads | — | `GET /v1/organization/projects`, `.../projects/{id}/api_keys` (`redacted_value`, `last_used_at`, optional `expires_at`, `owner_project_access`), `admin_api_keys` | Only these GETs (plus `costs`) are allowed for an admin key |
+| OpenAI | Costs API | — | `GET /v1/organization/costs`: `bucket_width` only `1d`, `limit` ≤ 180, `amount.value` + lowercase `currency`, `next_page` | Estimate = budget − sum since purchase; last bucket start shown as «up to» |
+| xAI | Billing read methods | «verificar el método HTTP» | [Billing](https://docs.x.ai/developers/rest-api-reference/management/billing.md): `GET prepaid/balance`, `GET postpaid/spending-limits`, `GET postpaid/invoice/preview` | Only those GETs, on management-api.x.ai |
+| xAI | Prepaid sign | — | Purchases are negative changes, spend positive; example `total: "-1000"` after buying 10 USD; invoice preview `prepaidCredits: "-4500"` | **Interpretation**: balance = −`total`/100. To confirm against the xAI console |
+| xAI | When the API stops | — | «once the team has consumed all of the prepaid credits, and the postpaid usage amount has reached the user-set soft spending limit» | Available = prepaid + max(0, `effectiveSl` − `amountBeforeVat`); red only at 0 |
+| xAI | Out-of-credit error text on chat completions | «por verificar» | Not documented | Unmapped (grey «check failed» if unexpected) |
+| xAI | Model list | — | `GET /v1/models` (free) | Used to pick the probe model |
+| All | Probe prices | — | Official pricing pages (see `capabilities.toml`, `prices_checked`) | Haiku 5.5 0.10/0.50, text-embedding-3-small 0.02, Gemini 3.5 Flash-Lite 0.30/2.50, grok-4.20 non-reasoning 1.25/2.50 USD per 1M tokens |
+| Codex / Claude Code / Gemini CLI | Session file formats | undocumented | Undocumented (third-party sources) | Tolerant parsers; data marked `file`, unverified; tokens never stored |
+
 ## Notes for phase 4 (hint matching)
 
 - Anthropic `partial_key_hint` uses three ASCII dots: `sk-ant-api03-R2D...igAA`.

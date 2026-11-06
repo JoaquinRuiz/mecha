@@ -17,6 +17,7 @@ REQUIRED = (
     "mecha/data/detect_patterns.toml",
     "mecha/data/capabilities.toml",
     "mecha/store/migrations/001_initial.sql",
+    "mecha/store/migrations/002_credential_facts.sql",
 )
 REQUIRED_PREFIX = "mecha/static/assets/"
 

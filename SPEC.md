@@ -195,6 +195,8 @@ Cada proveedor tiene su `errors.py` con este mapeo como funciones puras, probado
 | `xai-flags` | xAI | `api_key_disabled`, `api_key_blocked` o `team_blocked` a `true` | Validez `blocked` («equipo bloqueado» para `team_blocked`) |
 | `xai-mgmt-expired` | xAI (gestión) | `expireTime` en el pasado | Caducidad `expired` |
 | `openrouter-empty` | OpenRouter | `limit_remaining` ≤ 0 | Saldo `empty` |
+| `probe-404` | Todos (sonda activa) | 404 del modelo de la sonda | Gris «sonda mal configurada», no clave inválida; se olvida el modelo elegido para volver a escoger |
+| `probe-timeout` | Todos (sonda activa) | Timeout después de enviar el `POST` | Gris «resultado incierto»: puede haberse cobrado, nunca se reintenta solo |
 
 Sin mapeo por ahora: el tope de gasto mensual de Gemini (la documentación no dice qué error devuelve) y el error de saldo agotado de xAI (texto sin documentar). Ambos quedan `unknown` hasta ver el error real.
 
@@ -367,7 +369,7 @@ Mecha guarda secretos de alto valor, así que el diseño asume que cualquier web
 - **Sin vuelta atrás.** Tras el alta, el frontend solo ve `redacted` y `fingerprint`. En la v1 no existe «mostrar clave».
 - **Logs.** Un filtro de logging (instalado como factoría de `LogRecord`, cubre todos los loggers y el texto de las excepciones) sustituye cualquier coincidencia de los patrones de detección por su forma redactada, y httpx nunca registra cabeceras.
 - **Trazas.** Typer va con `pretty_exceptions_show_locals=False` y sin trazas de Rich: mostrarían las variables locales, secreto incluido. Los errores inesperados de la CLI se imprimen redactados y salen con 3.
-- **Salidas controladas.** Cada plugin declara su lista de hosts permitidos y el cliente HTTP rechaza cualquier otro destino, otro puerto, `http://` y las redirecciones. Respeta `HTTPS_PROXY`/`NO_PROXY` y `SSL_CERT_FILE`/`SSL_CERT_DIR` (proxy corporativo, CA propia): el guard valida el host de destino con o sin proxy, y httpx no lee `.netrc` sin `NetRCAuth` explícito.
+- **Salidas controladas.** Cada plugin declara, por tipo de clave, una lista cerrada de **método + host + ruta**, y el cliente HTTP rechaza cualquier otra petición, otro puerto, `http://` y las redirecciones. Las admin keys y las claves de gestión, que podrían crear o borrar claves, solo tienen las lecturas `GET` verificadas; una clave de gestión de xAI solo llega a `management-api.x.ai` y una clave normal nunca llega allí. Solo se reintentan las lecturas: un `POST` (sonda activa) se envía una vez, y si da timeout tras enviarse queda como «resultado incierto», porque puede haberse cobrado. Respeta `HTTPS_PROXY`/`NO_PROXY` y `SSL_CERT_FILE`/`SSL_CERT_DIR` (proxy corporativo, CA propia): el guard valida el host de destino con o sin proxy, y httpx no lee `.netrc` sin `NetRCAuth` explícito.
 - **Ficheros vinculados.** Solo lectura; los tokens se leen en cada comprobación y nunca se copian.
 - **Copias.** `mecha export` produce un fichero cifrado con frase de paso; no hay export en claro.
 
@@ -430,7 +432,7 @@ La CLI comparte núcleo con la web y sirve para cron, CI y para quien vive en la
 | `mecha` o `mecha serve` | Arranca el servidor y abre el navegador; `--port`, `--no-open`, `--demo` |
 | `mecha add` | Alta con entrada oculta o por stdin (el secreto nunca va como argumento: acabaría en el historial y en la lista de procesos); `--label`, `--tag`, `--notes`, `--provider`, `--kind`, `--expires`. La entrada se normaliza: espacios y saltos de línea, comillas, `NOMBRE=` y `Bearer` delante |
 | `mecha ls` | Tabla con semáforo, tipo, caducidad, saldo y última comprobación |
-| `mecha check [ID…]` | Comprueba con el endpoint gratuito; `--json` para scripts, `--strict` para tratar el gris como fallo, `--force` para saltarse el intervalo mínimo; `--active` para sondas llega en la Fase 4 |
+| `mecha check [ID…]` | Comprueba con el endpoint gratuito; `--json` para scripts, `--strict` para tratar el gris como fallo, `--force` para saltarse el intervalo mínimo; `--active` usa la sonda de pago (una por hora; con `--force`, aunque no haya pasado la hora) |
 | `mecha detect` | Clasifica un secreto leído de stdin, sin red ni guardado |
 | `mecha import .env` | Importa `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, `GOOGLE_API_KEY`, `XAI_API_KEY`, `OPENROUTER_API_KEY` y cualquier valor con prefijo reconocido |
 | `mecha link <herramienta>` | Vincula el fichero de sesión de `codex`, `claude-code` o `gemini-cli`; `--path` para rutas propias |
@@ -496,6 +498,17 @@ Sondas activas, claves de administración y gestión con enriquecimiento, ficher
 
 
 Una caducidad que venga de una API (admin key, gestión de xAI, OpenRouter) se guarda como dato de la credencial, igual que la manual, y no solo dentro de la última observación: si el siguiente check falla, la clave que caduca mañana debe seguir en ámbar, no pasar a gris.
+
+Decisiones de la fase:
+
+- **Hechos de la credencial.** Lo que informa una API (caducidad, estado, último uso, saldo) o descubre una sonda activa (saldo agotado, límites) se guarda como dato de la credencial con su fuente y su fecha (migración `002`), así un check pasivo posterior, que no sabe nada de saldo, no devuelve la tarjeta a verde. Los límites de una sonda cuentan como mucho una hora.
+- **Sondas activas.** Una petición mínima de pago por proveedor, con el modelo fijado en `config.toml` o, en `auto`, el más barato del listado gratuito de modelos. Como mucho una por credencial y hora: el planificador nunca se lo salta (y usa la sonda cuando `active_probe` está activado); a mano sí, con confirmación explícita (`--force` en la CLI, un diálogo en la UI). Un 404 del modelo es «sonda mal configurada», no una clave inválida. Las sondas gratuitas (`count_tokens`, `countTokens`) existen como opción, pero no está documentado si reflejan el saldo agotado. El coste se estima con una tabla de precios fechada (`capabilities.toml`): tokens, USD por sonda y USD al mes con la frecuencia del planificador, redondeado hacia arriba.
+- **Enriquecimiento.** La pista de la API de administración se cruza generando su formato desde el secreto descifrado (cabeza y cola); si una pista coincide con más de una clave guardada, no se enriquece ninguna. xAI cruza por `api_key_id`.
+- **Saldo de xAI.** Prepago más el margen que queda hasta el límite mensual de pospago; rojo solo si no queda ni prepago ni margen. Se muestra en la clave de gestión y en cada clave del equipo, con su umbral.
+- **Saldo estimado de OpenAI.** Presupuesto manual en la admin key menos la Costs API desde esa fecha, con la fecha del último día incluido. En las claves hijas es solo información («saldo de la organización, estimado») y nunca cambia el semáforo. El formulario avisa de que con recarga automática la estimación no sirve.
+- **Ficheros vinculados.** Claude Code en macOS: si el fichero existe en la ruta por defecto o en `--path`, se lee; el Llavero queda fuera de la v1 y solo se menciona cuando no hay fichero. Un fichero que desaparece pone la tarjeta en ámbar.
+- **Importar `.env`.** Vista previa sin estado con las claves ya redactadas para elegir cuáles importar; el servidor no guarda nada entre la vista previa y la importación.
+
 - [ ] Una admin key de OpenAI rellena `expires_at` y `last_used_at` de las project keys guardadas.
 - [ ] Una clave de gestión de xAI muestra el saldo prepago en USD.
 - [ ] Un fichero de Codex vinculado muestra plan y fin de suscripción sin copiar tokens.

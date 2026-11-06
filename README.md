@@ -20,6 +20,9 @@ mecha add --label "Prod Anthropic" --tag prod   # hidden prompt; or pipe: echo "
 mecha ls                                        # table; --json for scripts
 mecha detect < key.txt                          # classify offline, store nothing
 mecha check                                     # free passive check of every key; --json, --strict, --force
+mecha check --active ID                         # paid probe (fraction of a cent; one per hour, --force to repeat)
+mecha link codex                                # link ~/.codex/auth.json (read-only, tokens never copied)
+mecha import .env                               # preview detected keys (redacted), then import
 mecha serve                                     # dashboard on 127.0.0.1:7878 (opens the browser)
 mecha serve --demo                              # fake data, no secrets, no network: try the UI
 mecha rm 01J9ABCD --yes
