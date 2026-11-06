@@ -152,6 +152,7 @@ export const en = {
   'cap.admin_key': 'with an admin key',
   'cap.management_key': 'with a management key',
   'cap.error_only': 'only on errors',
+  'cap.admin_estimate': 'estimated, with an admin key',
   unknownFormat: 'Unknown format: choose the provider and type.',
   ambiguousProvider: 'This prefix is shared by several providers: confirm it.',
   refreshToken: 'This looks like an OAuth refresh token. Mecha never stores refresh tokens.',

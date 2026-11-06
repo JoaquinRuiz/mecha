@@ -676,6 +676,69 @@ def _ls_table(items: list[CredentialStatus], now: datetime, width: int) -> Table
     return table
 
 
+def _backup_passphrase(confirm: bool) -> str:
+    from mecha.store.keys import ENV_BACKUP_PASSPHRASE_FILE, backup_passphrase_from_env
+
+    value = backup_passphrase_from_env()
+    if value is None and _interactive():
+        value = _passphrase_prompt("Backup passphrase", confirm)
+    if not value:
+        console.print(
+            "[red]error:[/red] no backup passphrase (type it in a terminal, "
+            f"or set {ENV_BACKUP_PASSPHRASE_FILE} to a 0600 file)."
+        )
+        raise typer.Exit(EXIT_FAILURE)
+    return value
+
+
+@app.command("export")
+@handle_errors
+def export_cmd(
+    file: Annotated[Path, typer.Argument(help="Backup file to create (0600).")],
+    force: Annotated[bool, typer.Option("--force", help="Overwrite an existing file.")] = False,
+) -> None:
+    """Write an encrypted backup of every credential (secrets included, history not).
+
+    The backup is encrypted with its own passphrase (Argon2id); the store key is never
+    written, so it opens on any machine. There is no plaintext export.
+    """
+    from mecha.core.backup import encrypt_backup, write_private
+
+    service = _service()
+    try:
+        payload = service.export_payload()
+    finally:
+        service.close()
+    data = encrypt_backup(payload, _backup_passphrase(confirm=True))
+    write_private(file.expanduser(), data, overwrite=force)
+    console.print(f"[green]Exported[/green] {len(payload['items'])} credential(s) to {file}")
+
+
+@app.command("restore")
+@handle_errors
+def restore_cmd(
+    file: Annotated[Path, typer.Argument(help="Backup file written by `mecha export`.")],
+) -> None:
+    """Merge an encrypted backup into this store. Never overwrites; duplicates are skipped."""
+    from mecha.core.backup import BackupError, decrypt_backup
+
+    try:
+        data = file.expanduser().read_bytes()
+    except OSError as exc:
+        raise BackupError(f"Cannot read {file}.") from exc
+    payload = decrypt_backup(data, _backup_passphrase(confirm=False))
+    service = _service()
+    try:
+        results = service.restore_payload(payload)
+    finally:
+        service.close()
+    for label, action, cid in results:
+        colour = "green" if action == "restored" else "yellow"
+        console.print(f"[{colour}]{action}[/{colour}]  {cid}  {label}")
+    restored = sum(1 for _, a, _ in results if a == "restored")
+    console.print(f"{restored} restored, {len(results) - restored} skipped.")
+
+
 @app.command("link")
 @handle_errors
 def link_cmd(

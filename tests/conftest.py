@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import os
 
 # Must happen before keyring picks a backend: tests never touch the real system keyring.
@@ -34,6 +35,28 @@ def isolated_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     for var in ("MECHA_PASSPHRASE", "MECHA_PASSPHRASE_FILE", "MECHA_LOG_LEVEL"):
         monkeypatch.delenv(var, raising=False)
     return home
+
+
+@pytest.fixture(autouse=True)
+def close_stores(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """Close every store a test opened (Python 3.13+ warns on unclosed SQLite connections,
+    and the warning would surface in whichever later test triggers garbage collection)."""
+    import sqlite3
+
+    from mecha.store.db import Store
+
+    opened: list[Store] = []
+    original = Store.__init__
+
+    def tracking(self: Store, *args: object, **kwargs: object) -> None:
+        original(self, *args, **kwargs)  # type: ignore[arg-type]
+        opened.append(self)
+
+    monkeypatch.setattr(Store, "__init__", tracking)
+    yield
+    for store in opened:
+        with contextlib.suppress(sqlite3.Error):
+            store.conn.close()
 
 
 @pytest.fixture

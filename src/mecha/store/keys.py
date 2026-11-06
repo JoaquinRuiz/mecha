@@ -65,19 +65,30 @@ def keyring_delete(store_id: str) -> None:
         keyring.delete_password(KEYRING_SERVICE, keyring_user(store_id))
 
 
-def _read_passphrase_file(path: Path) -> str:
+def _read_passphrase_file(path: Path, var: str = ENV_PASSPHRASE_FILE) -> str:
     try:
         st = path.stat()
     except OSError as exc:
-        raise PassphraseFileError(f"{ENV_PASSPHRASE_FILE}: cannot read {path}.") from exc
+        raise PassphraseFileError(f"{var}: cannot read {path}.") from exc
     if os.name == "posix" and stat.S_IMODE(st.st_mode) & 0o077:
         raise PassphraseFileError(
-            f"{ENV_PASSPHRASE_FILE}: {path} is accessible by other users; run chmod 600 on it."
+            f"{var}: {path} is accessible by other users; run chmod 600 on it."
         )
     text = path.read_text(encoding="utf-8").rstrip("\r\n")
     if not text:
-        raise PassphraseFileError(f"{ENV_PASSPHRASE_FILE}: {path} is empty.")
+        raise PassphraseFileError(f"{var}: {path} is empty.")
     return text
+
+
+ENV_BACKUP_PASSPHRASE_FILE = "MECHA_BACKUP_PASSPHRASE_FILE"  # noqa: S105
+
+
+def backup_passphrase_from_env() -> str | None:
+    """Non-interactive backups read their passphrase from a 0600 file, never an argument."""
+    file = os.environ.get(ENV_BACKUP_PASSPHRASE_FILE)
+    if not file:
+        return None
+    return _read_passphrase_file(Path(file).expanduser(), ENV_BACKUP_PASSPHRASE_FILE)
 
 
 def passphrase_from_env() -> str | None:

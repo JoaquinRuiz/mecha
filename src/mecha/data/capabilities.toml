@@ -1,14 +1,15 @@
 # Capability matrix (SPEC.md, "Capacidades por proveedor"). This file is the contract:
-# GET /api/providers (phase 3) and the UI texts come from it, and the UI never promises
-# anything that is not here. `passive` lists the free endpoint used per credential kind;
-# tests check it against each plugin.
+# GET /api/providers, the UI texts and the README table (scripts/gen_capabilities.py)
+# come from it, and nothing promises what is not here. `passive` lists the free endpoint
+# used per credential kind; tests check it against each plugin.
 #
-# Values for validate/funds/expiry: "yes", "no", "admin_key", "management_key", "error_only".
+# Values for validate/funds/expiry: "yes", "no", "admin_key", "management_key",
+# "admin_estimate" (estimated from a manual budget and the Costs API), "error_only".
 
 [providers.anthropic]
 name = "Anthropic"
 validate = "yes"
-funds = "error_only"        # no endpoint; shows up when generating (active probe, phase 4)
+funds = "error_only"        # no endpoint; shows up when generating (active probe)
 expiry = "admin_key"        # expires_at via the Admin API
 active_probe = "POST /v1/messages, max_tokens 1"
 passive = { api_key = "GET /v1/models", admin_key = "GET /v1/organizations/api_keys" }
@@ -16,7 +17,7 @@ passive = { api_key = "GET /v1/models", admin_key = "GET /v1/organizations/api_k
 [providers.openai]
 name = "OpenAI"
 validate = "yes"
-funds = "error_only"        # spend via Costs API with an admin key (phase 4)
+funds = "admin_estimate"    # manual budget minus the Costs API (admin key); never red
 expiry = "admin_key"
 active_probe = "POST /v1/embeddings, one word"
 passive = { api_key = "GET /v1/models", admin_key = "GET /v1/organization/admin_api_keys" }
@@ -44,7 +45,6 @@ funds = "yes"               # limit_remaining with the key itself
 expiry = "yes"              # expires_at with the key itself
 active_probe = "not needed"
 passive = { api_key = "GET /api/v1/key" }
-phase = 4
 
 # --- Active probes (opt-in per credential) --------------------------------------------
 # Default model and prices per 1M tokens, from the official pricing pages on the date in

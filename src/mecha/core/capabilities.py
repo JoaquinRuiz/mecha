@@ -13,7 +13,7 @@ from pydantic import BaseModel
 
 from mecha.core.models import CredentialKind, ProviderId
 
-Level = Literal["yes", "no", "admin_key", "management_key", "error_only"]
+Level = Literal["yes", "no", "admin_key", "management_key", "admin_estimate", "error_only"]
 
 
 class ProbeInfo(BaseModel):
@@ -53,7 +53,6 @@ class Capabilities(BaseModel):
     expiry: Level
     active_probe: str
     passive: dict[CredentialKind, str]
-    phase: int = 2
 
 
 def _load() -> dict[str, Any]:

@@ -59,18 +59,58 @@ jobs:
       - run: uv run ruff check .
       - run: uv run ruff format --check .
       - run: uv run mypy
+      - name: README capability table matches capabilities.toml
+        run: uv run python scripts/gen_capabilities.py --check
       - run: uv run pytest
 
       # Package
       - run: uv build
-      - name: Wheel ships the frontend
-        run: uv run python scripts/check_wheel.py dist
+      - name: Wheel and sdist ship the frontend (and a wheel rebuilt from the sdist)
+        run: uv run python scripts/check_dist.py dist --rebuild-from-sdist
       - if: matrix.os == 'ubuntu-latest'
         uses: actions/upload-artifact@v7
         with:
           name: dist
           path: dist/
           retention-days: 7
+
+  python:
+    name: test (Python ${{ matrix.python }}, Linux)
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.3.3  # no moving major tag upstream
+        with:
+          enable-cache: true
+          python-version: ${{ matrix.python }}
+      - run: uv sync --locked
+      - run: uv run pytest
+
+  smoke:
+    name: clean install (${{ matrix.os }})
+    needs: build
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: scripts/smoke_install.py
+          sparse-checkout-cone-mode: false
+      - uses: astral-sh/setup-uv@v10.3.3  # no moving major tag upstream
+      - uses: actions/download-artifact@v8
+        with:
+          name: dist
+          path: dist
+      - name: uvx --from <wheel> mecha-keys
+        shell: bash
+        run: uv run --no-project scripts/smoke_install.py dist/mecha_keys-*-py3-none-any.whl
 
   e2e:
     name: e2e (demo mode, Chromium)
