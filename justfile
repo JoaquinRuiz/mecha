@@ -23,7 +23,7 @@ dev:
 # Build the frontend into src/mecha/static and the Python sdist + wheel
 build: build-web
     uv build
-    uv run python scripts/check_wheel.py dist
+    uv run python scripts/check_dist.py dist --rebuild-from-sdist
 
 # Build only the frontend
 build-web:

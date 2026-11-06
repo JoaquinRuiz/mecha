@@ -63,8 +63,8 @@ jobs:
 
       # Package
       - run: uv build
-      - name: Wheel ships the frontend
-        run: uv run python scripts/check_wheel.py dist
+      - name: Wheel and sdist ship the frontend (and a wheel rebuilt from the sdist)
+        run: uv run python scripts/check_dist.py dist --rebuild-from-sdist
       - if: matrix.os == 'ubuntu-latest'
         uses: actions/upload-artifact@v7
         with:
