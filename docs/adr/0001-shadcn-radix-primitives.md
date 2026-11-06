@@ -39,7 +39,20 @@ Radix variants. Components import primitives from the unified `radix-ui` package
 - The generated `cn()` helper comes from the [`cn`](https://github.com/shadcn-ui/cn) package
   (published by the shadcn-ui organisation, replaces clsx + tailwind-merge). Verified as an
   official shadcn-ui repository before accepting the dependency.
-- Open question for phase 3: some Radix components (e.g. `Dialog` via `react-remove-scroll`)
-  inject `<style>` elements at runtime, which the strict `style-src 'self'` CSP would block.
-  Check when the first such component lands, and prefer a per-response nonce over
-  `'unsafe-inline'` if needed.
+- Resolved in phase 3 (CSP and injected styles): several libraries insert `<style>` elements
+  at runtime, which the strict `style-src 'self'` CSP blocks. Mecha uses a **per-response
+  nonce**, never `'unsafe-inline'`:
+  - `vite build` writes a placeholder nonce (`html.cspNonce`) on its tags and in
+    `<meta property="csp-nonce">`; FastAPI replaces it with a fresh value on every
+    `index.html` response (`Cache-Control: no-store`) and puts the same value in the CSP header.
+  - The app reads it with `meta.nonce` (browsers blank the attribute under a CSP header) and
+    calls `setNonce` from `get-nonce` before the first render. `get-nonce` is a direct
+    dependency pinned to the version `react-style-singleton` uses: with two copies,
+    `setNonce` would not reach Radix's scroll lock.
+  - Motion gets it through `MotionConfig nonce` (`AnimatePresence mode="popLayout"`); the
+    shadcn chart's `<style>` element gets it as a prop.
+  - Sonner 2.0.8 injects its CSS on import without a nonce, so toasts are built on Radix Toast.
+  - The theme is applied before first paint by `/theme.js`, a file, not an inline script.
+  - The Playwright smoke test fails on any CSP violation or console error, so a dependency
+    update that injects un-nonced styles breaks CI. Verified by removing `setNonce`: the test
+    reports `style-src-elem` violations.

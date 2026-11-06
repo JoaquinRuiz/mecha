@@ -20,6 +20,8 @@ mecha add --label "Prod Anthropic" --tag prod   # hidden prompt; or pipe: echo "
 mecha ls                                        # table; --json for scripts
 mecha detect < key.txt                          # classify offline, store nothing
 mecha check                                     # free passive check of every key; --json, --strict, --force
+mecha serve                                     # dashboard on 127.0.0.1:7878 (opens the browser)
+mecha serve --demo                              # fake data, no secrets, no network: try the UI
 mecha rm 01J9ABCD --yes
 mecha passphrase set                            # recovery passphrase for the store
 ```
@@ -39,6 +41,7 @@ just setup    # uv sync, pnpm install, gitleaks pre-commit hook
 just dev      # FastAPI on 127.0.0.1:7878 + Vite on localhost:5173 (opens the Vite URL)
 just test     # pytest + vitest
 just lint     # ruff, mypy, biome, tsc
+just e2e      # Playwright against `mecha serve --demo` (needs `pnpm -C web exec playwright install chromium`)
 just build    # vite build -> src/mecha/static, then uv build (wheel includes the UI)
 uv run mecha serve   # serve the built UI on http://127.0.0.1:7878
 ```

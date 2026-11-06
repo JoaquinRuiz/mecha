@@ -74,7 +74,7 @@ export async function apiFetch<T>(
   const headers = new Headers(init.headers)
   if (token) headers.set('Authorization', `Bearer ${token}`)
   const res = await fetch(`/api${path}`, { ...init, headers, credentials: 'omit' })
-  const body: unknown = await res.json().catch(() => null)
+  const body: unknown = res.status === 204 ? null : await res.json().catch(() => null)
   if (!res.ok) {
     const err = (body ?? {}) as { code?: string; message?: string }
     throw new ApiError(res.status, err.code ?? 'http_error', err.message ?? res.statusText)

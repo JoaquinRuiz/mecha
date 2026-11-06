@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react'
 import { Button } from '@/components/ui/button'
+import { Dashboard } from '@/Dashboard'
+import { useI18n } from '@/i18n'
 import { ApiError, apiFetch, initSessionToken } from '@/lib/session'
 
-type Health = { status: 'ok'; version: string }
+type Health = { status: 'ok'; version: string; demo: boolean }
 
 type State =
   | { kind: 'loading' }
@@ -11,6 +13,7 @@ type State =
   | { kind: 'error'; message: string }
 
 export function App({ token = initSessionToken() }: { token?: string | null }) {
+  const { t } = useI18n()
   const [state, setState] = useState<State>({ kind: 'loading' })
   const [attempt, setAttempt] = useState(0)
 
@@ -33,28 +36,24 @@ export function App({ token = initSessionToken() }: { token?: string | null }) {
     }
   }, [token, attempt])
 
+  if (state.kind === 'ready' && token) return <Dashboard token={token} />
+
   return (
     <main className="mx-auto flex min-h-svh max-w-xl flex-col justify-center gap-4 p-6">
       <h1 className="font-semibold text-2xl tracking-tight">Mecha</h1>
-      {state.kind === 'loading' && <p className="text-muted-foreground">Connecting…</p>}
-      {state.kind === 'ready' && (
-        <p role="status">Connected to the local server · v{state.health.version}</p>
-      )}
+      {state.kind === 'loading' && <p className="text-muted-foreground">…</p>}
       {state.kind === 'locked' && (
         <div role="alert" className="space-y-2">
-          <p className="font-medium">Locked</p>
-          <p className="text-muted-foreground text-sm">
-            This page needs the session link printed by <code>mecha serve</code>. Open that link
-            again from your terminal.
-          </p>
+          <p className="font-medium">{t('locked')}</p>
+          <p className="text-muted-foreground text-sm">{t('lockedHint')}</p>
         </div>
       )}
       {state.kind === 'error' && (
         <div role="alert" className="space-y-2">
-          <p className="font-medium">Cannot reach the local server</p>
+          <p className="font-medium">{t('unreachable')}</p>
           <p className="text-muted-foreground text-sm">{state.message}</p>
           <Button variant="outline" onClick={() => setAttempt((n) => n + 1)}>
-            Retry
+            {t('retry')}
           </Button>
         </div>
       )}

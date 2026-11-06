@@ -34,27 +34,42 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from mecha.api import health
+from mecha.api import health, routes
+from mecha.api.routes import ApiContext, error_response
+from mecha.core.errors import MechaError
+from mecha.core.redact import redact_text
 
 STATIC_DIR = Path(__file__).parent / "static"
 
-CSP = "; ".join(
-    [
-        "default-src 'none'",
-        "script-src 'self'",
-        "style-src 'self'",
-        "img-src 'self' data:",
-        "font-src 'self'",
-        "connect-src 'self'",
-        "manifest-src 'self'",
-        "base-uri 'none'",
-        "form-action 'none'",
-        "frame-ancestors 'none'",
-    ]
-)
+# Placeholder that `vite build` writes into index.html (html.cspNonce); replaced per response.
+NONCE_PLACEHOLDER = "__MECHA_CSP_NONCE__"
+MAX_BODY = 64 * 1024  # largest request body accepted (a secret is at most 8 KiB)
+
+
+def csp(nonce: str | None = None) -> str:
+    """Strict CSP. With a nonce, scripts/styles carrying it are allowed too (Radix scroll
+    lock and Motion inject <style> elements); never 'unsafe-inline'. frame-ancestors,
+    base-uri and form-action do not inherit from default-src, so they are explicit."""
+    extra = f" 'nonce-{nonce}'" if nonce else ""
+    return "; ".join(
+        [
+            "default-src 'none'",
+            f"script-src 'self'{extra}",
+            f"style-src 'self'{extra}",
+            "img-src 'self' data:",
+            "font-src 'self'",
+            "connect-src 'self'",
+            "manifest-src 'self'",
+            "base-uri 'none'",
+            "form-action 'self'",
+            "frame-ancestors 'none'",
+        ]
+    )
+
+
+CSP = csp()
 
 SECURITY_HEADERS: list[tuple[bytes, bytes]] = [
-    (b"content-security-policy", CSP.encode()),
     (b"x-content-type-options", b"nosniff"),
     (b"referrer-policy", b"no-referrer"),
     (b"x-frame-options", b"DENY"),
@@ -118,12 +133,21 @@ class LocalGuard:
 
         async def send_with_headers(message: Message) -> None:
             if message["type"] == "http.response.start":
-                message["headers"] = [*message.get("headers", []), *SECURITY_HEADERS]
+                existing = message.get("headers", [])
+                extra = list(SECURITY_HEADERS)
+                if not any(k.lower() == b"content-security-policy" for k, _ in existing):
+                    extra.append((b"content-security-policy", CSP.encode()))  # index sets its own
+                message["headers"] = [*existing, *extra]
             await send(message)
 
         host = headers.get(b"host", b"").decode("latin-1")
         if host not in self.hosts:
             await _send_error(send_with_headers, 400, "invalid_host", "Host header not allowed.")
+            return
+
+        length = headers.get(b"content-length", b"0")
+        if length.isdigit() and int(length) > MAX_BODY:
+            await _send_error(send_with_headers, 413, "too_large", "Request body too large.")
             return
 
         path: str = scope["path"]
@@ -170,9 +194,11 @@ def create_app(
     port: int,
     static_dir: Path | None = STATIC_DIR,
     background: Sequence[BackgroundJob] = (),
+    api: ApiContext | None = None,
 ) -> FastAPI:
     """Build the application. ``static_dir`` is the compiled frontend (may be missing);
-    ``background`` jobs (e.g. the scheduler) run for the lifetime of the server."""
+    ``background`` jobs (e.g. the scheduler) run for the lifetime of the server; ``api``
+    holds the unlocked service (without it, data endpoints answer 503)."""
     app = FastAPI(
         title="Mecha",
         docs_url=None,
@@ -188,11 +214,19 @@ def create_app(
 
     @app.exception_handler(RequestValidationError)
     async def validation_error(_: Request, exc: RequestValidationError) -> JSONResponse:
-        # Never echo the input back: it may contain a secret.
-        fields = ", ".join(".".join(str(p) for p in e["loc"]) for e in exc.errors())
+        # Never echo the input back: it may contain a secret. Not even field names, which
+        # come from the client (a JSON key can be the secret itself): redact and truncate.
+        names = sorted({".".join(str(p)[:40] for p in e["loc"]) for e in exc.errors()})
+        fields = redact_text(", ".join(names[:10]))
         return JSONResponse(_error_body("invalid_request", f"Invalid fields: {fields}"), 422)
 
+    @app.exception_handler(MechaError)
+    async def mecha_error(_: Request, exc: MechaError) -> JSONResponse:
+        return error_response(exc)
+
+    app.state.api = api
     app.include_router(health.router, prefix="/api")
+    app.include_router(routes.router, prefix="/api")
 
     @app.api_route("/api/{rest:path}", methods=["GET", "POST", "PATCH", "PUT", "DELETE"])
     async def api_not_found(rest: str) -> JSONResponse:
@@ -202,13 +236,26 @@ def create_app(
         app.mount("/assets", StaticFiles(directory=static_dir / "assets", check_dir=False))
 
         root = static_dir.resolve()
+        shell = index.read_text(encoding="utf-8")
+
+        def page() -> HTMLResponse:
+            nonce = secrets.token_urlsafe(18)
+            return HTMLResponse(
+                shell.replace(NONCE_PLACEHOLDER, nonce),
+                headers={"cache-control": "no-store", "content-security-policy": csp(nonce)},
+            )
 
         @app.get("/{path:path}", include_in_schema=False)
         async def spa(path: str) -> Response:
             candidate = (root / path).resolve()
-            if path and candidate.is_file() and candidate.is_relative_to(root):
+            if (
+                path
+                and path != "index.html"
+                and candidate.is_file()
+                and candidate.is_relative_to(root)
+            ):
                 return FileResponse(candidate)
-            return FileResponse(index, headers={"cache-control": "no-cache"})
+            return page()
     else:
 
         @app.get("/{path:path}", include_in_schema=False)

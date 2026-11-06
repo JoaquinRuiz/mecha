@@ -6,8 +6,13 @@ import { defineConfig } from 'vitest/config'
 // The FastAPI server (mecha serve) listens here; see src/mecha/cli.py.
 const API_TARGET = 'http://127.0.0.1:7878'
 
+// Placeholder nonce: Vite writes it on its tags and into <meta property="csp-nonce">;
+// FastAPI swaps it for a fresh random value on every index.html response.
+export const NONCE_PLACEHOLDER = '__MECHA_CSP_NONCE__'
+
 export default defineConfig({
   plugins: [react(), tailwindcss()],
+  html: { cspNonce: NONCE_PLACEHOLDER },
   resolve: {
     alias: { '@': fileURLToPath(new URL('./src', import.meta.url)) },
   },
@@ -30,5 +35,6 @@ export default defineConfig({
     environment: 'jsdom',
     globals: true,
     setupFiles: ['./src/test/setup.ts'],
+    include: ['src/**/*.test.{ts,tsx}'],
   },
 })

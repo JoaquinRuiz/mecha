@@ -216,6 +216,30 @@ class Store:
             return None
         return self.cipher.decrypt_secret(bytes(row["secret_ct"]), cred_id)
 
+    EDITABLE = frozenset({"label", "tags", "notes", "manual_expires_at"})
+
+    def update(self, cred_id: str, changes: dict[str, object]) -> None:
+        """Update editable, non-secret fields. The secret is never updatable: rotating a key
+        means deleting it and adding the new one."""
+        unknown = set(changes) - self.EDITABLE
+        if unknown:
+            raise ValueError(f"not editable: {sorted(unknown)}")
+        cols: list[str] = []
+        values: list[object] = []
+        for key, value in changes.items():
+            cols.append(f"{key} = ?")
+            if key == "tags":
+                values.append(json.dumps(value))
+            elif key == "manual_expires_at":
+                values.append(_ts(value) if isinstance(value, datetime) else None)
+            else:
+                values.append(value)
+        if cols:
+            self.conn.execute(
+                f"UPDATE credentials SET {', '.join(cols)} WHERE id = ?",  # noqa: S608 - fixed names
+                (*values, cred_id),
+            )
+
     def delete(self, cred_id: str) -> bool:
         cur = self.conn.execute("DELETE FROM credentials WHERE id = ?", (cred_id,))
         return cur.rowcount > 0
@@ -291,7 +315,8 @@ class Store:
 
     def close(self) -> None:
         try:
-            self.conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            if str(self.path) != ":memory:":
+                self.conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
         finally:
             self.conn.close()
 
@@ -314,6 +339,20 @@ def _locked_message(path: Path, has_passphrase: bool) -> str:
         "was ever set. Restore the keyring entry; a new key will not be generated over "
         "existing data."
     )
+
+
+def open_memory_store() -> Store:
+    """An ephemeral in-memory store with a random key that never leaves the process
+    (demo mode). Nothing touches the disk or the keyring."""
+    conn = sqlite3.connect(":memory:", isolation_level=None, check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON")
+    _migrate(conn)
+    store_id = new_ulid()
+    store = Store(conn, Path(":memory:"), store_id, new_data_key())
+    store.set_meta("store_id", store_id)
+    store.set_meta("verifier", b64e(store.cipher.make_verifier(store_id)))
+    return store
 
 
 def open_store(path: Path, prompt: keys.PassphrasePrompt | None = None) -> Store:

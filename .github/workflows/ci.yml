@@ -48,6 +48,8 @@ jobs:
       - run: pnpm -C web test
       - name: Build frontend into src/mecha/static
         run: pnpm -C web build
+      - name: Bundle size budget
+        run: pnpm -C web size
 
       # Backend
       - uses: astral-sh/setup-uv@v10.3.3  # no moving major tag upstream
@@ -68,4 +70,34 @@ jobs:
         with:
           name: dist
           path: dist/
+          retention-days: 7
+
+  e2e:
+    name: e2e (demo mode, Chromium)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+        with:
+          package_json_file: web/package.json
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - uses: astral-sh/setup-uv@v10.3.3  # no moving major tag upstream
+        with:
+          enable-cache: true
+      - run: pnpm -C web install --frozen-lockfile
+      # The e2e run must use a build that succeeded: never a stale one.
+      - run: pnpm -C web build
+      - run: uv sync --locked
+      - run: pnpm -C web exec playwright install --with-deps chromium
+      - name: Playwright against mecha serve --demo
+        run: pnpm -C web e2e
+      - if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: playwright-traces
+          path: web/test-results/
           retention-days: 7
