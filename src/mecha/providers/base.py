@@ -60,6 +60,11 @@ class ProviderContext:
     now: datetime
     http: HttpSettings = field(default_factory=HttpSettings)
     anthropic_version: str = "2026-10-21"
+    # Active probes: a pinned model ("auto" = cheapest from the free model list), the model
+    # used last time (reused to avoid listing models on every probe), and free mode.
+    probe_model: str = "auto"
+    cached_probe_model: str | None = None
+    probe_free: bool = False
 
 
 class Provider(Protocol):
@@ -75,6 +80,10 @@ class Provider(Protocol):
         ...
 
     async def check_passive(
+        self, cred: Credential, secret: str, http: httpx.AsyncClient, ctx: ProviderContext
+    ) -> Observation: ...
+
+    async def check_active(
         self, cred: Credential, secret: str, http: httpx.AsyncClient, ctx: ProviderContext
     ) -> Observation: ...
 
@@ -239,12 +248,43 @@ def observation(
 def failed(now: datetime, endpoint: str, exc: Exception) -> Observation:
     status = exc.status if isinstance(exc, NetworkError) else None
     code = "disallowed_request" if isinstance(exc, DisallowedRequestError) else "network"
+    uncertain = isinstance(exc, NetworkError) and exc.uncertain
     return Observation(
         check_status=CheckStatus.failed,
         observed_at=now,
         http=HttpTrace(endpoint=endpoint, status=status, latency_ms=None),
         error=ProviderError(code=code, message=redact_text(str(exc))),
+        # A paid POST that timed out after sending may have been billed: never retried.
+        failure="probe_uncertain" if uncertain else None,
     )
+
+
+def probe_misconfigured(now: datetime, http: HttpTrace | None, model: str) -> Observation:
+    """The probe model no longer exists (404): a configuration problem, not a bad key."""
+    return Observation(
+        check_status=CheckStatus.failed,
+        observed_at=now,
+        http=http,
+        failure="probe_misconfigured",
+        probe_model=model,
+        error=ProviderError(code="model_not_found", message=f"Probe model {model!r} not found."),
+    )
+
+
+def probe_observation(
+    finding: Finding,
+    *,
+    now: datetime,
+    http: HttpTrace | None,
+    limits: Limits | None,
+    model: str,
+    paid: bool,
+) -> Observation:
+    """A successful paid probe proves the key can spend: funds are at least "ok"."""
+    if paid and finding.understood and finding.funds is None and finding.validity is Validity.valid:
+        finding.funds = FundsState.ok
+    obs = observation(finding, now=now, http=http, limits=limits)
+    return obs.model_copy(update={"mode": "active", "probe_model": model})
 
 
 async def request(
@@ -255,11 +295,14 @@ async def request(
     *,
     headers: dict[str, str],
     params: dict[str, str | int] | None = None,
+    json: object | None = None,
 ) -> Exchange | Observation:
     """Send a request; on failure return a grey Observation instead of raising."""
     endpoint = f"{method} {httpx.URL(url).copy_with(query=None)}"
     try:
-        return await send(http, method, url, headers=headers, params=params, settings=ctx.http)
+        return await send(
+            http, method, url, headers=headers, params=params, json=json, settings=ctx.http
+        )
     except (NetworkError, DisallowedRequestError) as exc:
         if isinstance(exc, DisallowedRequestError):
             log.error("blocked outbound request: %s", exc)

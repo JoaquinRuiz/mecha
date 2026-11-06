@@ -393,7 +393,9 @@ class DemoService(MechaService):
     def is_fresh(self, cred: Credential, now: datetime) -> bool:
         return False  # every demo check "runs"
 
-    async def _observe(self, cred: Credential, provider: Provider) -> Observation:
+    async def _observe(
+        self, cred: Credential, provider: Provider, *, active: bool = False
+    ) -> Observation:
         scenario = self._scenarios.get(cred.id) or self._added_scenario(cred, provider)
         rng = random.Random(f"{SEED}:{cred.id}")  # noqa: S311
         return _observation(scenario, self.now(), round(rng.uniform(120, 480), 1), final=True)

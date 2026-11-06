@@ -49,6 +49,8 @@ R_CHECK_FAILED = "check_failed"  # «falló la comprobación»
 R_VALIDITY_UNKNOWN = "validity_unknown"
 R_LOCAL_ONLY = "local_only"
 R_VALID = "valid"
+R_PROBE_MISCONFIGURED = "probe_misconfigured"  # the probe model no longer exists (404)
+R_PROBE_UNCERTAIN = "probe_uncertain"  # a paid POST timed out after sending: maybe billed
 R_BILLING_ERROR = "billing_error"  # «problema de facturación»
 R_PERMISSION_DENIED = "permission_denied"  # «sin permiso»
 
@@ -73,6 +75,9 @@ class Observation(BaseModel):
     account: dict[str, str] = Field(default_factory=dict)
     account_source: dict[str, Source] = Field(default_factory=dict)
     notes: list[Reason] = Field(default_factory=list)  # provider-specific reasons
+    # Why a failed check failed, when it is more specific than "check failed".
+    failure: str | None = None
+    probe_model: str | None = None  # model used by an active probe
     http: HttpTrace | None = None
     error: ProviderError | None = None
 
@@ -97,6 +102,7 @@ def compute_overall(
     retiring: bool,
     check_status: CheckStatus,
     notes: Sequence[Reason] = (),
+    failure: str | None = None,
 ) -> tuple[Overall, list[Reason]]:
     red: list[str] = []
     # A 401 on a key whose known expiry has passed is shown as expired, not invalid.
@@ -137,7 +143,7 @@ def compute_overall(
     if check_status is CheckStatus.not_checked:
         return Overall.grey, [Reason(code=R_NOT_CHECKED, overall=Overall.grey)]
     if check_status is CheckStatus.failed:
-        return Overall.grey, [Reason(code=R_CHECK_FAILED, overall=Overall.grey)]
+        return Overall.grey, [Reason(code=failure or R_CHECK_FAILED, overall=Overall.grey)]
     if validity is Validity.valid:
         return Overall.green, [Reason(code=R_VALID, overall=Overall.green)]
     return Overall.grey, [Reason(code=R_VALIDITY_UNKNOWN, overall=Overall.grey)]
@@ -252,6 +258,7 @@ def evaluate(
         retiring=cred.retiring,
         check_status=check_status,
         notes=notes,
+        failure=obs.failure if obs and not ok else None,
     )
     checked_at = obs.observed_at if obs else now
     return CheckResult(

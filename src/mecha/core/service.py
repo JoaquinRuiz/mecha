@@ -22,10 +22,14 @@ from mecha.core.errors import (
 )
 from mecha.core.http import HttpSettings, make_client
 from mecha.core.models import (
+    Budget,
     CheckResult,
     CheckStatus,
     Credential,
     CredentialKind,
+    Fact,
+    Funds,
+    Limits,
     Overall,
     ProviderError,
     ProviderId,
@@ -69,6 +73,8 @@ class CredentialStatus:
     result: CheckResult
     last_known: LastKnown | None = None  # last non-grey result (shown on grey cards)
     cached: bool = False  # result reused because of the minimum interval
+    # An active probe was asked for but the one-per-hour limit applies until this time.
+    probe_next_at: datetime | None = None
 
 
 def _clean_tags(tags: Iterable[str]) -> list[str]:
@@ -293,12 +299,29 @@ class MechaService:
         )
         return obs.observed_at + self.retry_delay(failures)
 
-    async def _observe(self, cred: Credential, provider: Provider) -> Observation:
+    def probe_next_at(self, cred: Credential) -> datetime | None:
+        """When the next active probe is allowed (None: now)."""
+        last = cred.facts.last_probe_at
+        if last is None:
+            return None
+        nxt = last + timedelta(minutes=self.config.probes.min_interval_minutes)
+        return nxt if nxt > self._now() else None
+
+    def can_probe(self, cred: Credential) -> bool:
+        return cred.kind is CredentialKind.api_key and self.is_remote(cred)
+
+    async def _observe(
+        self, cred: Credential, provider: Provider, *, active: bool = False
+    ) -> Observation:
         now = self._now()
+        probes = self.config.probes
         ctx = ProviderContext(
             now=now,
             http=self._settings(),
             anthropic_version=self.config.providers.anthropic.version,
+            probe_model=getattr(probes, f"{cred.provider.value}_model", "auto"),
+            cached_probe_model=cred.facts.probe_model,
+            probe_free=probes.free,
         )
         secret = self.store.secret(cred.id)
         if secret is None:  # pragma: no cover - only linked files have no secret (phase 4)
@@ -309,6 +332,8 @@ class MechaService:
                 self._semaphore(cred.provider),
                 make_client(provider.routes(cred.kind), self._settings()) as http,
             ):
+                if active:
+                    return await provider.check_active(cred, secret, http, ctx)
                 return await provider.check_passive(cred, secret, http, ctx)
         except Exception as exc:  # a plugin bug must not take the whole batch down
             log.warning("provider %s failed: %s", cred.provider.value, type(exc).__name__)
@@ -321,13 +346,50 @@ class MechaService:
         finally:
             del secret
 
-    async def _check_one(self, cred: Credential, force: bool) -> CredentialStatus:
+    def _save_probe_facts(self, cred: Credential, obs: Observation) -> Credential:
+        """What a probe learned outlives later passive checks (which know nothing of funds)."""
+        facts = cred.facts.model_copy(deep=True)
+        facts.last_probe_at = obs.observed_at  # attempted: counts towards the hourly limit
+        # A missing model is forgotten so "auto" picks a new one next time.
+        facts.probe_model = None if obs.failure == "probe_misconfigured" else obs.probe_model
+        if obs.check_status is CheckStatus.ok:
+            if obs.funds is not None:
+                facts.funds = Fact[Funds](
+                    value=obs.funds, source="api", observed_at=obs.observed_at
+                )
+            if obs.limits is not None:
+                facts.limits = Fact[Limits](
+                    value=obs.limits, source="header", observed_at=obs.observed_at
+                )
+        self.store.set_facts(cred.id, facts)
+        return cred.model_copy(update={"facts": facts})
+
+    async def _check_one(
+        self,
+        cred: Credential,
+        force: bool,
+        *,
+        active: bool = False,
+        force_probe: bool = False,
+        scheduled: bool = False,
+    ) -> CredentialStatus:
         provider = get_provider(cred.provider)
         if provider is None or not self.is_remote(cred):
             return self._status(cred)  # OAuth / linked: offline only, never a remote call
-        if not force and self.is_fresh(cred, self._now()):
+        wants_probe = self.can_probe(cred) and (active or (scheduled and cred.active_probe))
+        next_probe = self.probe_next_at(cred)
+        # The scheduler never skips the hourly limit; a person may, explicitly (--force).
+        probe = wants_probe and (next_probe is None or (force_probe and not scheduled))
+        if wants_probe and not probe and not scheduled:
+            status = self._status(cred)
+            return CredentialStatus(
+                status.credential, status.result, status.last_known, False, next_probe
+            )
+        if not probe and not force and self.is_fresh(cred, self._now()):
             return self._status(cred, cached=True)
-        obs = await self._observe(cred, provider)
+        obs = await self._observe(cred, provider, active=probe)
+        if probe:
+            cred = self._save_probe_facts(cred, obs)
         result = evaluate(cred, obs, self._now(), self.thresholds)
         self.store.add_result(result, obs)
         return self._status(cred)
@@ -337,6 +399,9 @@ class MechaService:
         ids: Sequence[str] = (),
         *,
         force: bool = False,
+        active: bool = False,
+        force_probe: bool = False,
+        scheduled: bool = False,
         on_result: Callable[[CredentialStatus, int, int], None] | None = None,
     ) -> builtins.list[CredentialStatus]:
         """Passive check of ``ids`` (all credentials if empty), respecting concurrency.
@@ -348,7 +413,9 @@ class MechaService:
 
         async def one(cred: Credential) -> CredentialStatus:
             nonlocal done
-            item = await self._check_one(cred, force)
+            item = await self._check_one(
+                cred, force, active=active, force_probe=force_probe, scheduled=scheduled
+            )
             done += 1
             if on_result is not None:
                 on_result(item, done, total)
@@ -358,9 +425,14 @@ class MechaService:
         return self._sorted(list(items))
 
     def check_sync(
-        self, ids: Sequence[str] = (), *, force: bool = False
+        self,
+        ids: Sequence[str] = (),
+        *,
+        force: bool = False,
+        active: bool = False,
+        force_probe: bool = False,
     ) -> builtins.list[CredentialStatus]:
-        return asyncio.run(self.check(ids, force=force))
+        return asyncio.run(self.check(ids, force=force, active=active, force_probe=force_probe))
 
     def resolve_id(self, id_or_prefix: str) -> str:
         value = id_or_prefix.strip().upper()
@@ -391,11 +463,21 @@ class MechaService:
         tags: Iterable[str] | None = None,
         notes: str | None = None,
         manual_expires_at: datetime | None = None,
+        active_probe: bool | None = None,
+        manual_budget: Budget | None = None,
         clear: Iterable[str] = (),
     ) -> CredentialStatus:
-        """Edit non-secret fields. ``clear`` names fields to reset (notes, manual_expires_at)."""
+        """Edit non-secret fields. ``clear`` names fields to reset (notes, manual_expires_at,
+        manual_budget)."""
         cred_id = self.resolve_id(id_or_prefix)
         changes: dict[str, object] = {}
+        if active_probe is not None:
+            cred = self.store.get(cred_id)
+            if active_probe and (cred is None or not self.can_probe(cred)):
+                raise DetectionError("Active probes are only available for API keys.")
+            changes["active_probe"] = active_probe
+        if manual_budget is not None:
+            changes["manual_budget"] = manual_budget
         if label is not None:
             if not label.strip():
                 raise DetectionError("The label cannot be empty.")
@@ -409,7 +491,7 @@ class MechaService:
                 manual_expires_at = manual_expires_at.replace(tzinfo=UTC)
             changes["manual_expires_at"] = manual_expires_at
         for field_name in clear:
-            if field_name not in ("notes", "manual_expires_at"):
+            if field_name not in ("notes", "manual_expires_at", "manual_budget"):
                 raise DetectionError(f"{field_name} cannot be cleared.")
             changes[field_name] = None
         self.store.update(cred_id, changes)

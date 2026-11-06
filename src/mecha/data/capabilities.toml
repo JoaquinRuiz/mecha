@@ -45,3 +45,52 @@ expiry = "yes"              # expires_at with the key itself
 active_probe = "not needed"
 passive = { api_key = "GET /api/v1/key" }
 phase = 4
+
+# --- Active probes (opt-in per credential) --------------------------------------------
+# Default model and prices per 1M tokens, from the official pricing pages on the date in
+# `prices_checked`. The cost shown in the UI is an estimate from this table; `model = auto`
+# picks the cheapest suitable model from the provider's free model list at probe time.
+# `free_probe` is an alternative free endpoint (opt-in): whether it reflects an exhausted
+# balance is not documented (docs/providers.md).
+
+[probes.anthropic]
+endpoint = "POST /v1/messages"
+default_model = "claude-haiku-5-5"
+input_tokens = 10
+output_tokens = 1
+input_usd_per_mtok = 0.10
+output_usd_per_mtok = 0.50
+prices_checked = "2026-11-06"
+prices_source = "https://platform.claude.com/docs/en/about-claude/pricing"
+free_probe = "POST /v1/messages/count_tokens"
+
+[probes.openai]
+endpoint = "POST /v1/embeddings"
+default_model = "text-embedding-3-small"
+input_tokens = 1
+output_tokens = 0
+input_usd_per_mtok = 0.02
+output_usd_per_mtok = 0.0
+prices_checked = "2026-11-06"
+prices_source = "https://developers.openai.com/api/docs/pricing"
+
+[probes.gemini]
+endpoint = "POST /v1beta/models/{model}:generateContent"
+default_model = "gemini-3.5-flash-lite"
+input_tokens = 5
+output_tokens = 1
+input_usd_per_mtok = 0.30
+output_usd_per_mtok = 2.50
+prices_checked = "2026-11-06"
+prices_source = "https://aistudio.google.com/docs/pricing"
+free_probe = "POST /v1beta/models/{model}:countTokens"
+
+[probes.xai]
+endpoint = "POST /v1/chat/completions"
+default_model = "grok-4.20-0309-non-reasoning"  # cheapest non-reasoning chat model
+input_tokens = 10
+output_tokens = 1
+input_usd_per_mtok = 1.25
+output_usd_per_mtok = 2.50
+prices_checked = "2026-11-06"
+prices_source = "https://docs.x.ai/developers/pricing"

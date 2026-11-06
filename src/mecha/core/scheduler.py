@@ -46,7 +46,7 @@ class Scheduler:
         if not ids:
             return []
         log.info("scheduled passive check of %d credential(s)", len(ids))
-        return await self.service.check(ids, on_result=self.on_result)
+        return await self.service.check(ids, scheduled=True, on_result=self.on_result)
 
     async def run_forever(self) -> None:
         while True:

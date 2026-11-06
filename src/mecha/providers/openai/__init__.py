@@ -16,12 +16,15 @@ from mecha.providers.base import (
     json_body,
     observation,
     parse_rate_limits,
+    probe_misconfigured,
+    probe_observation,
     request,
     trace,
 )
 from mecha.providers.openai.errors import map_error
 
 BASE = "https://api.openai.com"
+PROBE_DEFAULT = "text-embedding-3-small"
 
 
 HOST = "api.openai.com"
@@ -80,6 +83,59 @@ class OpenAIProvider:
         else:
             finding = map_error(response.status_code, body)
         return observation(finding, now=ctx.now, http=trace(f"GET {path}", result), limits=limits)
+
+    async def _probe_model(
+        self, http: httpx.AsyncClient, ctx: ProviderContext, headers: dict[str, str]
+    ) -> str | Observation:
+        if ctx.probe_model != "auto":
+            return ctx.probe_model
+        if ctx.cached_probe_model:
+            return ctx.cached_probe_model
+        listed = await request(http, ctx, "GET", BASE + "/v1/models", headers=headers)
+        if isinstance(listed, Observation):
+            return listed
+        ids = [
+            str(m.get("id"))
+            for m in (json_body(listed.response) or {}).get("data") or []
+            if isinstance(m, dict)
+        ]
+        if PROBE_DEFAULT in ids:
+            return PROBE_DEFAULT
+        embeddings = sorted(i for i in ids if "embedding" in i)
+        return embeddings[0] if embeddings else PROBE_DEFAULT
+
+    async def check_active(
+        self, cred: Credential, secret: str, http: httpx.AsyncClient, ctx: ProviderContext
+    ) -> Observation:
+        """POST /v1/embeddings with one word on the cheapest embedding model."""
+        headers = {"authorization": f"Bearer {secret}"}
+        model = await self._probe_model(http, ctx, headers)
+        if isinstance(model, Observation):
+            return model
+        path = "/v1/embeddings"
+        result = await request(
+            http, ctx, "POST", BASE + path, headers=headers, json={"model": model, "input": "ping"}
+        )
+        if isinstance(result, Observation):
+            return result.model_copy(update={"mode": "active", "probe_model": model})
+        response, body = result.response, json_body(result.response)
+        http_trace = trace(f"POST {path}", result)
+        err = (body or {}).get("error") if body else None
+        if response.status_code == 404 or (
+            isinstance(err, dict) and err.get("code") == "model_not_found"
+        ):
+            return probe_misconfigured(ctx.now, http_trace, model)
+        limits = parse_rate_limits(
+            response.headers, ctx.now, prefix="x-ratelimit-", tokens="tokens"
+        )
+        finding = (
+            Finding(validity=Validity.valid)
+            if response.is_success
+            else map_error(response.status_code, body)
+        )
+        return probe_observation(
+            finding, now=ctx.now, http=http_trace, limits=limits, model=model, paid=True
+        )
 
 
 PROVIDER = OpenAIProvider()
