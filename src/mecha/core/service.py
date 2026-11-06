@@ -12,7 +12,9 @@ from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
+from mecha.core.backup import BackupError
 from mecha.core.config import Config
 from mecha.core.detect import Detection, detect
 from mecha.core.envimport import parse_env
@@ -166,6 +168,22 @@ def apply_update(
         ReasonFact(code=code, overall=Overall.amber, observed_at=now, by=by)
         for code in update.warnings
     ]
+    return out
+
+
+def _remap_reporters(facts: CredentialFacts, id_map: dict[str, str]) -> CredentialFacts:
+    """Point facts reported by an admin key at that key's id in the destination store."""
+    out = facts.model_copy(deep=True)
+    for name in ("status", "expires_at", "last_used_at", "funds", "funds_info"):
+        fact = getattr(out, name)
+        if fact is not None and fact.by is not None:
+            fact.by = id_map.get(fact.by, fact.by)
+    for fact in out.account.values():
+        if fact.by is not None:
+            fact.by = id_map.get(fact.by, fact.by)
+    for reason in out.reasons:
+        if reason.by is not None:
+            reason.by = id_map.get(reason.by, reason.by)
     return out
 
 
@@ -725,6 +743,64 @@ class MechaService:
             else:
                 results.append({"index": index, "ok": True, "id": item.credential.id})
         return results
+
+    # --- encrypted backups -------------------------------------------------------------
+    def export_payload(self) -> dict[str, Any]:
+        """Credentials with their secrets and settings (no check history, no store key).
+
+        The caller encrypts the result with a backup passphrase (``mecha.core.backup``).
+        Fingerprints are left out: they are an HMAC under *this* store's key and mean
+        nothing in another store, so ``restore`` recomputes them.
+        """
+        items = []
+        for cred in self.store.all():
+            data = cred.model_dump(mode="json", exclude={"fingerprint"})
+            items.append({"credential": data, "secret": self.store.secret(cred.id)})
+        return {"kind": "mecha-backup", "exported_at": self._now().isoformat(), "items": items}
+
+    def restore_payload(self, payload: dict[str, Any]) -> builtins.list[tuple[str, str, str]]:
+        """Merge a backup into this store; never overwrites. Returns (label, action, id).
+
+        Duplicates are found by recomputing each fingerprint with the destination store's
+        key. A clashing id gets a new one, and parent links and fact reporters follow it.
+        """
+        if payload.get("kind") != "mecha-backup":
+            raise BackupError("This file is not a Mecha backup.")
+        entries = payload.get("items") or []
+        id_map: dict[str, str] = {}
+        plan: builtins.list[tuple[dict[str, Any], str | None, str]] = []
+        out: builtins.list[tuple[str, str, str]] = []
+        for entry in entries:
+            data = dict(entry["credential"])
+            secret = entry.get("secret")
+            label = str(data.get("label") or "")
+            if data.get("kind") == CredentialKind.oauth_file.value:
+                fingerprint = self.store.cipher.fingerprint(f"linked:{data.get('linked_path')}")
+            elif secret:
+                fingerprint = self.store.cipher.fingerprint(secret)
+            else:
+                out.append((label, "skipped: no secret in the backup", str(data.get("id"))))
+                continue
+            existing = self.store.by_fingerprint(fingerprint)
+            if existing is not None:
+                id_map[str(data["id"])] = existing
+                out.append((label, "skipped: already stored", existing))
+                continue
+            old_id = str(data["id"])
+            new_id = old_id if self.store.get(old_id) is None else new_ulid()
+            id_map[old_id] = new_id
+            data["id"], data["fingerprint"] = new_id, fingerprint
+            plan.append((data, secret, old_id))
+        for data, secret, _old in plan:
+            if data.get("parent_id"):
+                data["parent_id"] = id_map.get(str(data["parent_id"]))
+            cred = Credential.model_validate(data)
+            cred = cred.model_copy(update={"facts": _remap_reporters(cred.facts, id_map)})
+            self.store.insert(cred, secret if cred.kind is not CredentialKind.oauth_file else None)
+            if cred.facts != CredentialFacts():
+                self.store.set_facts(cred.id, cred.facts)
+            out.append((cred.label, "restored", cred.id))
+        return out
 
     # --- linked session files ---------------------------------------------------------
     def link(
