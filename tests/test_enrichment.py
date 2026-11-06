@@ -329,3 +329,36 @@ def test_xai_team_balance_counts_postpaid_margin(
     assert funds.state is state
     assert funds.amount == Decimal(amount)
     assert set(account) == {"prepaid_usd", "postpaid_margin_usd"}
+
+
+async def test_openrouter_reports_funds_and_expiry_with_its_own_key(clock: Clock) -> None:
+    svc = service(clock)
+    cid = svc.add(fake("sk-or-v1-", 64)).credential.id
+    with respx.mock as router:
+        router.get("https://openrouter.ai/api/v1/key").mock(
+            return_value=httpx.Response(200, json=fixture("openrouter", "key_ok")["body"])
+        )
+        [r] = await svc.check([cid])
+    assert r.result.funds.value.amount == Decimal("74.5")
+    assert r.result.funds.value.state is FundsState.ok
+    assert r.result.expiry.value.expires_at == datetime(2027, 12, 31, 23, 59, 59, tzinfo=UTC)
+    clock.advance(hours=7)
+    with respx.mock as router:  # a later failed check keeps what the API reported
+        router.get("https://openrouter.ai/api/v1/key").mock(side_effect=httpx.ConnectError("down"))
+        [r] = await svc.check([cid])
+    assert r.result.overall is Overall.grey
+    assert r.result.expiry.value.expires_at is not None
+    assert r.result.funds.value.amount == Decimal("74.5")
+    svc.close()
+
+
+async def test_openrouter_exhausted_key_is_red(clock: Clock) -> None:
+    svc = service(clock)
+    cid = svc.add(fake("sk-or-v1-", 64)).credential.id
+    with respx.mock as router:
+        router.get("https://openrouter.ai/api/v1/key").mock(
+            return_value=httpx.Response(200, json=fixture("openrouter", "key_exhausted")["body"])
+        )
+        [r] = await svc.check([cid])
+    assert r.result.overall is Overall.red
+    svc.close()

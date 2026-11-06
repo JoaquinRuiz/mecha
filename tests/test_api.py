@@ -136,12 +136,11 @@ def test_check_and_history(api: tuple[TestClient, ApiContext]) -> None:
 def test_providers_only_promise_what_is_implemented(api: tuple[TestClient, ApiContext]) -> None:
     client, _ = api
     providers = {p["id"]: p for p in client.get("/api/providers").json()["providers"]}
-    assert set(providers) == {"anthropic", "openai", "gemini", "xai"}  # OpenRouter: phase 4
-    for p in providers.values():
-        assert p["funds"] in {"yes", "no", "error_only"}
-        assert p["expiry"] in {"yes", "no", "error_only"}
-    assert providers["anthropic"]["expiry"] == "no"  # admin-key enrichment is phase 4
-    assert providers["xai"]["funds"] == "no"
+    assert set(providers) == {"anthropic", "openai", "gemini", "xai", "openrouter"}
+    assert providers["anthropic"]["expiry"] == "admin_key"
+    assert providers["xai"]["funds"] == "management_key"
+    assert providers["openrouter"]["funds"] == "yes"
+    assert providers["gemini"]["expiry"] == "no"
 
 
 async def test_event_stream_ends_when_bus_closes() -> None:

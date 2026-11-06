@@ -233,8 +233,8 @@ async def history(
 
 @router.get("/providers")
 async def providers() -> dict[str, Any]:
-    """Capability matrix, limited to what is implemented today (no promises)."""
-    implemented = {"yes", "error_only", "no"}
+    """Capability matrix, limited to what is implemented (no promises)."""
+    implemented = {"yes", "error_only", "no", "admin_key", "management_key"}
     out = []
     for pid, caps in load_capabilities().items():
         if pid not in ENABLED:

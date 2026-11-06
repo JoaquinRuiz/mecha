@@ -168,6 +168,7 @@ def test_every_plugin_declares_official_hosts_only(provider_id: ProviderId) -> N
         "openai": {"api.openai.com"},
         "gemini": {"generativelanguage.googleapis.com"},
         "xai": {"api.x.ai", "management-api.x.ai"},
+        "openrouter": {"openrouter.ai"},
     }[provider.id.value]
     hosts = {r.host for kind in CredentialKind for r in provider.routes(kind)}
     assert hosts == expected

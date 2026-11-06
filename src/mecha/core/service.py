@@ -404,6 +404,21 @@ class MechaService:
         self.store.set_facts(cred.id, facts)
         return cred.model_copy(update={"facts": facts})
 
+    def _save_reported_facts(self, cred: Credential, obs: Observation) -> Credential:
+        """Expiry or funds that a key's own check reported (e.g. OpenRouter) are kept as
+        facts, so a later failed check does not lose them."""
+        facts = cred.facts.model_copy(deep=True)
+        if obs.expiry is not None:
+            never = obs.expiry.state.value == "none"
+            if obs.expiry.expires_at is not None or never:
+                facts.expires_at = Fact[datetime | None](
+                    value=obs.expiry.expires_at, source="api", observed_at=obs.observed_at
+                )
+        if obs.funds is not None:
+            facts.funds = Fact[Funds](value=obs.funds, source="api", observed_at=obs.observed_at)
+        self.store.set_facts(cred.id, facts)
+        return cred.model_copy(update={"facts": facts})
+
     async def _check_one(
         self,
         cred: Credential,
@@ -430,6 +445,10 @@ class MechaService:
         obs = await self._observe(cred, provider, active=probe)
         if probe:
             cred = self._save_probe_facts(cred, obs)
+        elif obs.check_status is CheckStatus.ok and (
+            obs.expiry is not None or obs.funds is not None
+        ):
+            cred = self._save_reported_facts(cred, obs)
         if cred.kind in ENRICHING_KINDS and obs.check_status is CheckStatus.ok:
             cred = await self._enrich(cred, provider) or cred
         result = evaluate(cred, obs, self._now(), self.thresholds)
