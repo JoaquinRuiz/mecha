@@ -59,6 +59,8 @@ jobs:
       - run: uv run ruff check .
       - run: uv run ruff format --check .
       - run: uv run mypy
+      - name: README capability table matches capabilities.toml
+        run: uv run python scripts/gen_capabilities.py --check
       - run: uv run pytest
 
       # Package

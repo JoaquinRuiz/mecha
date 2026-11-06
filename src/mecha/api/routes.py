@@ -319,7 +319,7 @@ async def import_env(request: Request, body: EnvImportIn) -> dict[str, Any]:
 async def providers(request: Request) -> dict[str, Any]:
     """Capability matrix, limited to what is implemented (no promises), with the estimated
     cost of an active probe (dated price table) per probe and per month."""
-    implemented = {"yes", "error_only", "no", "admin_key", "management_key"}
+    implemented = {"yes", "error_only", "no", "admin_key", "management_key", "admin_estimate"}
     out = []
     for pid, caps in load_capabilities().items():
         if pid not in ENABLED:
@@ -329,7 +329,6 @@ async def providers(request: Request) -> dict[str, Any]:
                 "id": pid.value,
                 "name": caps.name,
                 "validate": caps.validate_,
-                # Admin/management enrichment arrives in phase 4: report it as unavailable.
                 "funds": caps.funds if caps.funds in implemented else "no",
                 "expiry": caps.expiry if caps.expiry in implemented else "no",
                 "kinds": sorted(k.value for k in caps.passive),

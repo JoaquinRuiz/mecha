@@ -43,6 +43,7 @@ lint:
     uv run ruff check .
     uv run ruff format --check .
     uv run mypy
+    uv run python scripts/gen_capabilities.py --check
     pnpm -C web lint
     pnpm -C web typecheck
 
@@ -60,6 +61,15 @@ secrets:
 # Everything CI runs
 ci: lint test build
     pnpm -C web size
+
+# Regenerate the README capability table from capabilities.toml
+capabilities:
+    uv run python scripts/gen_capabilities.py
+
+# Re-record docs/demo.gif from demo mode (needs ffmpeg and Playwright's Chromium)
+gif: build-web
+    pnpm -C web exec playwright test --config e2e/gif.config.ts
+    uv run python scripts/make_gif.py web/test-results/gif docs/demo.gif
 
 # Build and serve the packaged frontend
 serve: build-web
