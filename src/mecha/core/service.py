@@ -15,10 +15,12 @@ from pathlib import Path
 
 from mecha.core.config import Config
 from mecha.core.detect import Detection, detect
+from mecha.core.envimport import parse_env
 from mecha.core.errors import (
     AmbiguousProviderError,
     DetectionError,
     DuplicateCredentialError,
+    MechaError,
     NotFoundError,
 )
 from mecha.core.http import HttpSettings, make_client
@@ -654,6 +656,57 @@ class MechaService:
             changes[field_name] = None
         self.store.update(cred_id, changes)
         return self.get(cred_id)
+
+    # --- .env import ------------------------------------------------------------------
+    def preview_env(self, content: str) -> builtins.list[dict[str, object]]:
+        """What a .env would import, redacted. Nothing is stored."""
+        out: builtins.list[dict[str, object]] = []
+        for e in parse_env(content):
+            det = e.detection
+            existing = self.store.by_fingerprint(self.store.cipher.fingerprint(e.secret))
+            importable = existing is None and (det.format == "unknown" or det.storable)
+            out.append(
+                {
+                    "index": e.index,
+                    "line": e.line,
+                    "name": e.name,
+                    "redacted": det.redacted,
+                    "provider": det.provider.value if det.provider else None,
+                    "kind": det.kind.value if det.kind else None,
+                    "label": det.label,
+                    "verified": det.verified,
+                    "ambiguous": det.ambiguous or det.provider is None,
+                    "warnings": det.warnings,
+                    "duplicate_of": existing,
+                    "importable": importable,
+                }
+            )
+        return out
+
+    def import_env(
+        self,
+        content: str,
+        select: Iterable[int],
+        providers: dict[int, ProviderId] | None = None,
+    ) -> builtins.list[dict[str, object]]:
+        """Import the chosen entries; each result says what happened, never the secret."""
+        entries = {e.index: e for e in parse_env(content)}
+        providers = providers or {}
+        results: builtins.list[dict[str, object]] = []
+        for index in select:
+            entry = entries.get(index)
+            if entry is None:
+                results.append({"index": index, "ok": False, "code": "not_found"})
+                continue
+            try:
+                item = self.add(entry.secret, label=entry.name, provider=providers.get(index))
+            except MechaError as exc:
+                results.append(
+                    {"index": index, "ok": False, "code": exc.code, "message": exc.message}
+                )
+            else:
+                results.append({"index": index, "ok": True, "id": item.credential.id})
+        return results
 
     # --- linked session files ---------------------------------------------------------
     def link(
