@@ -361,6 +361,7 @@ class KeyUpdate:
     funds_source: Source = "api"
     funds_info: FundsInfo | None = None  # shown only (an organization-wide estimate)
     account: dict[str, str] = field(default_factory=dict)
+    warnings: list[str] = field(default_factory=list)  # amber reason codes (not proof)
 
 
 @dataclass

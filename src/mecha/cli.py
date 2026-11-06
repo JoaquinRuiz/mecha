@@ -239,6 +239,8 @@ REASON_TEXT = {
     "gemini_project_invalid": "the key's project is invalid or deleted",
     "gemini_org_policy_blocked": "Gemini API blocked by an organization policy",
     "gemini_iam_denied": "the key's service account lacks permission",
+    "funds_low_estimated": "low funds (estimated)",
+    "owner_no_project_access": "its owner no longer has access to the project",
     "probe_misconfigured": "probe misconfigured (model not found)",
     "probe_uncertain": "probe timed out after sending (may have been billed)",
     "linked_file_unreadable": "linked session file missing or unreadable",

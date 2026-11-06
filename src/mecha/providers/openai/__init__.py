@@ -21,7 +21,7 @@ from mecha.core.models import (
     ProviderId,
     Validity,
 )
-from mecha.core.status import Observation
+from mecha.core.status import R_OWNER_NO_ACCESS, Observation
 from mecha.providers.base import (
     ChildRef,
     Enrichment,
@@ -75,7 +75,8 @@ def _key_update(item: dict[str, Any], project: str | None = None) -> KeyUpdate:
         update.never_expires = item["expires_at"] is None
     update.last_used_at = _unix(item.get("last_used_at"))
     if item.get("owner_project_access") == "inactive":
-        update.status = Validity.blocked  # its owner lost access to the project
+        # Not proof that the key fails (a direct check would show that): a warning.
+        update.warnings.append(R_OWNER_NO_ACCESS)
     if project:
         update.account["project_id"] = project
     return update

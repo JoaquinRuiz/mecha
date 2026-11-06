@@ -199,6 +199,8 @@ export const es: Record<MessageKey, string> = {
   linkMissing: 'no existe',
   link: 'Vincular',
   linked: 'Vinculado «{label}»',
+  'reason.funds_low_estimated': 'Saldo bajo (estimado)',
+  'reason.owner_no_project_access': 'Su propietario ya no tiene acceso al proyecto',
   'reason.probe_misconfigured': 'Sonda mal configurada (modelo no encontrado)',
   'reason.probe_uncertain': 'La sonda agotó el tiempo tras enviarse (puede haberse cobrado)',
   'reason.linked_file_unreadable': 'El fichero de sesión vinculado falta o no se puede leer',

@@ -362,3 +362,57 @@ async def test_openrouter_exhausted_key_is_red(clock: Clock) -> None:
         [r] = await svc.check([cid])
     assert r.result.overall is Overall.red
     svc.close()
+
+
+async def test_inactive_owner_is_an_amber_warning_and_removing_the_admin_cleans_up(
+    clock: Clock,
+) -> None:
+    svc = service(clock)
+    admin = fake("sk-admin-", 80)
+    k1 = fake("sk-proj-", 120)
+    c1 = svc.add(k1).credential.id
+    admin_id = svc.add(admin).credential.id
+    expires = int((NOW + timedelta(days=60)).timestamp())
+    with respx.mock as router:
+        openai_routes(
+            router,
+            admin,
+            [project_key(k1, expires=expires, last_used=None, owner_project_access="inactive")],
+        )
+        await svc.check([admin_id])
+    r = svc.get(c1).result
+    assert r.overall is Overall.amber
+    assert "owner_no_project_access" in [x.code for x in r.reasons]
+    assert r.validity.value is not Validity.blocked
+    svc.remove(admin_id)
+    child = svc.get(c1)
+    assert child.credential.facts.reasons == []
+    assert child.credential.facts.expires_at is None
+    assert child.result.overall is Overall.grey  # back to its own (not yet checked) state
+    svc.close()
+
+
+async def test_removing_an_admin_key_clears_a_stale_revoked(clock: Clock) -> None:
+    svc = service(clock)
+    admin = fake("sk-ant-admin01-", 90)
+    k1 = "sk-ant-api03-R2D" + body(80) + "igAA"
+    c1 = svc.add(k1).credential.id
+    admin_id = svc.add(admin).credential.id
+    item = fixture("anthropic", "admin_api_keys_ok")["body"]["data"][0]
+    with respx.mock as router:
+        router.get("https://api.anthropic.com/v1/organizations/api_keys").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "data": [{**item, "status": "archived"}],
+                    "has_more": False,
+                    "first_id": "x",
+                    "last_id": "x",
+                },
+            )
+        )
+        await svc.check([admin_id])
+    assert svc.get(c1).result.overall is Overall.red
+    svc.remove(admin_id)
+    assert svc.get(c1).result.overall is not Overall.red
+    svc.close()

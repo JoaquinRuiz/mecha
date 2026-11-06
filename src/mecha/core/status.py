@@ -49,6 +49,8 @@ R_CHECK_FAILED = "check_failed"  # «falló la comprobación»
 R_VALIDITY_UNKNOWN = "validity_unknown"
 R_LOCAL_ONLY = "local_only"
 R_VALID = "valid"
+R_FUNDS_LOW_ESTIMATED = "funds_low_estimated"  # «saldo bajo (estimado)», never red
+R_OWNER_NO_ACCESS = "owner_no_project_access"  # «su propietario ya no tiene acceso al proyecto»
 R_LINKED_UNREADABLE = "linked_file_unreadable"  # a linked session file is missing/unreadable
 R_PROBE_MISCONFIGURED = "probe_misconfigured"  # the probe model no longer exists (404)
 R_PROBE_UNCERTAIN = "probe_uncertain"  # a paid POST timed out after sending: maybe billed
@@ -199,7 +201,13 @@ def evaluate(
     # not turn an "out of funds" card back to green, nor a failed check lose a known date.
     facts = cred.facts
     if not oauth:
-        if facts.status is not None and facts.status.value in RED_VALIDITY:
+        # The most recent evidence wins: a key reactivated in the console turns green on its
+        # next direct check, even if an older admin listing still said "revoked".
+        if (
+            facts.status is not None
+            and facts.status.value in RED_VALIDITY
+            and (validity is Validity.unknown or facts.status.observed_at > v_at)
+        ):
             validity, v_source, v_at = (
                 facts.status.value,
                 facts.status.source,
@@ -251,6 +259,19 @@ def evaluate(
     notes = obs.notes if ok and obs else []
     if cred.kind is CredentialKind.oauth_file and "file_error" in facts.account:
         notes = [*notes, Reason(code=R_LINKED_UNREADABLE, overall=Overall.amber)]
+    if not oauth:
+        # API-reported warnings are amber at most: red needs real proof.
+        notes = [*notes, *(Reason(code=f.code, overall=Overall.amber) for f in facts.reasons)]
+        info = facts.funds_info
+        # The organization estimate may warn on the admin key that reads the Costs API (and
+        # only there): amber «low funds (estimated)», never red, even at or below zero.
+        if (
+            info is not None
+            and info.by is None
+            and cred.kind is CredentialKind.admin_key
+            and info.value.amount < th.low_funds_usd
+        ):
+            notes = [*notes, Reason(code=R_FUNDS_LOW_ESTIMATED, overall=Overall.amber)]
 
     overall, reasons = compute_overall(
         kind=cred.kind,

@@ -38,6 +38,7 @@ from mecha.core.models import (
     Overall,
     ProviderError,
     ProviderId,
+    ReasonFact,
     Validity,
 )
 from mecha.core.normalize import normalize_secret
@@ -160,6 +161,23 @@ def apply_update(
         )
     for key, value in update.account.items():
         out.account[key] = Fact[str](value=value, source="api", observed_at=now, by=by)
+    # Warnings from this reporter are replaced as a whole on every enrichment.
+    out.reasons = [r for r in out.reasons if r.by != by] + [
+        ReasonFact(code=code, overall=Overall.amber, observed_at=now, by=by)
+        for code in update.warnings
+    ]
+    return out
+
+
+def forget_reporter(facts: CredentialFacts, reporter: str) -> CredentialFacts:
+    """Drop every fact a deleted admin/management key had reported about this credential."""
+    out = facts.model_copy(deep=True)
+    for name in ("status", "expires_at", "last_used_at", "funds", "funds_info"):
+        fact = getattr(out, name)
+        if fact is not None and fact.by == reporter:
+            setattr(out, name, None)
+    out.account = {k: f for k, f in out.account.items() if f.by != reporter}
+    out.reasons = [r for r in out.reasons if r.by != reporter]
     return out
 
 
@@ -758,5 +776,12 @@ class MechaService:
 
     def remove(self, id_or_prefix: str) -> Credential:
         cred = self.get(id_or_prefix).credential
+        # What this key reported about others goes with it (otherwise a stale "revoked"
+        # from a deleted admin key would stay red forever).
+        if cred.kind in ENRICHING_KINDS:
+            for other in self.store.all():
+                cleaned = forget_reporter(other.facts, cred.id)
+                if other.id != cred.id and cleaned != other.facts:
+                    self.store.set_facts(other.id, cleaned)
         self.store.delete(cred.id)
         return cred

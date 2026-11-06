@@ -333,13 +333,69 @@ def test_api_expiry_survives_a_failed_check() -> None:
     assert r.expiry.source == "api"
 
 
-def test_admin_status_revoked_is_red() -> None:
+def test_admin_status_revoked_is_red_only_when_newer_than_the_direct_check() -> None:
+    from mecha.core.status import evaluate
+
+    newer = _with_facts(
+        status={"value": "revoked", "source": "api", "observed_at": NOW, "by": "01ADMIN"}
+    )
+    assert evaluate(newer, _passive_ok(NOW - timedelta(hours=1)), NOW).overall is Overall.red
+    # Reactivated in the console: the more recent direct check wins.
+    older = _with_facts(
+        status={
+            "value": "revoked",
+            "source": "api",
+            "observed_at": NOW - timedelta(hours=2),
+            "by": "01ADMIN",
+        }
+    )
+    assert evaluate(older, _passive_ok(NOW), NOW).overall is Overall.green
+
+
+def test_reported_warnings_are_amber_never_red() -> None:
     from mecha.core.status import evaluate
 
     cred = _with_facts(
-        status={"value": "revoked", "source": "api", "observed_at": NOW, "by": "01ADMIN"}
+        reasons=[
+            {
+                "code": "owner_no_project_access",
+                "overall": "amber",
+                "observed_at": NOW,
+                "by": "01ADMIN",
+            }
+        ]
     )
-    assert evaluate(cred, _passive_ok(), NOW).overall is Overall.red
+    r = evaluate(cred, _passive_ok(), NOW)
+    assert r.overall is Overall.amber
+    assert "owner_no_project_access" in [x.code for x in r.reasons]
+
+
+def test_org_estimate_ambers_only_the_admin_key_and_never_reds() -> None:
+    from mecha.core.models import CredentialFacts, CredentialKind
+    from mecha.core.status import evaluate
+
+    info = {
+        "value": {"amount": "-3", "currency": "USD", "until": NOW},
+        "source": "inferred",
+        "observed_at": NOW,
+        "scope": "organization",
+    }
+    admin = _cred(kind=CredentialKind.admin_key).model_copy(
+        update={"facts": CredentialFacts.model_validate({"funds_info": info})}
+    )
+    r = evaluate(admin, _passive_ok(), NOW)
+    assert r.overall is Overall.amber  # <= 0 but only an estimate: never red
+    assert "funds_low_estimated" in [x.code for x in r.reasons]
+    child = _with_facts(funds_info={**info, "by": "01ADMIN"})
+    assert evaluate(child, _passive_ok(), NOW).overall is Overall.green
+    plenty = admin.model_copy(
+        update={
+            "facts": CredentialFacts.model_validate(
+                {"funds_info": {**info, "value": {"amount": "80", "currency": "USD", "until": NOW}}}
+            )
+        }
+    )
+    assert evaluate(plenty, _passive_ok(), NOW).overall is Overall.green
 
 
 def test_newer_funds_fact_beats_older_observation() -> None:

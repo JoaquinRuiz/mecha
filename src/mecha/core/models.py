@@ -160,6 +160,16 @@ class FundsInfo(BaseModel):
     estimated: bool = True
 
 
+class ReasonFact(BaseModel):
+    """An API-reported reason that is a warning, not proof of failure (e.g. the key's owner
+    lost access to the project): it colours the card amber, never red."""
+
+    code: str
+    overall: Overall
+    observed_at: datetime
+    by: str | None = None
+
+
 class CredentialFacts(BaseModel):
     expires_at: Fact[datetime | None] | None = None  # value None: the API says it never expires
     status: Fact[Validity] | None = None  # e.g. revoked/blocked according to an admin API
@@ -168,6 +178,7 @@ class CredentialFacts(BaseModel):
     funds_info: Fact[FundsInfo] | None = None  # shown only, never colours the card
     limits: Fact[Limits] | None = None  # from an active probe
     account: dict[str, Fact[str]] = Field(default_factory=dict)
+    reasons: list[ReasonFact] = Field(default_factory=list)
     last_probe_at: datetime | None = None
     probe_model: str | None = None
 
