@@ -5,11 +5,20 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader } from '@/components/ui/card'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { useI18n } from '@/i18n'
-import type { CredentialStatus } from '@/lib/types'
+import type { Api } from '@/lib/api'
+import type { CredentialStatus, ProbeInfo } from '@/lib/types'
 import { cn } from '@/lib/utils'
 import { Fuse, fuseModel } from './Fuse'
+import { ProbeButton } from './ProbeButton'
 import { StatusPill } from './StatusPill'
-import { checkedLine, fundsLine, limitsLine, providerName, reasonsLine } from './text'
+import {
+  checkedLine,
+  fundsInfoLine,
+  fundsLine,
+  limitsLine,
+  providerName,
+  reasonsLine,
+} from './text'
 
 export function ProviderMark({ provider }: { provider: string }) {
   const letters: Record<string, string> = {
@@ -33,6 +42,8 @@ interface Props {
   item: CredentialStatus
   now: string
   horizonDays: number
+  probe?: ProbeInfo | null
+  api?: Api
   onOpen: (id: string) => void
   onCheck: (id: string) => void
   checking: boolean
@@ -42,6 +53,8 @@ export const CredentialCard = memo(function CredentialCard({
   item,
   now,
   horizonDays,
+  probe,
+  api,
   onOpen,
   onCheck,
   checking,
@@ -51,6 +64,7 @@ export const CredentialCard = memo(function CredentialCard({
   const c = item.credential
   const overall = item.result.overall
   const limits = limitsLine(i18n, item)
+  const fundsInfo = fundsInfoLine(i18n, item)
   const remote = c.kind !== 'oauth_token' && c.kind !== 'oauth_file'
   const headingId = `cred-${c.id}`
   return (
@@ -97,8 +111,14 @@ export const CredentialCard = memo(function CredentialCard({
             </>
           )}
         </dl>
-        <div className="flex items-center justify-between pt-1">
-          <span className="text-muted-foreground text-xs">{checkedLine(i18n, item, now)}</span>
+        {fundsInfo && <p className="text-muted-foreground text-xs">{fundsInfo}</p>}
+        <div className="flex items-center justify-between gap-1 pt-1">
+          <span className="mr-auto text-muted-foreground text-xs">
+            {checkedLine(i18n, item, now)}
+          </span>
+          {remote && probe && api && c.kind === 'api_key' && (
+            <ProbeButton item={item} probe={probe} api={api} now={now} />
+          )}
           {remote && (
             <Tooltip>
               <TooltipTrigger asChild>

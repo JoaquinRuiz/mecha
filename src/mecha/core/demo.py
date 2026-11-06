@@ -12,11 +12,16 @@ import random
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
+from typing import Any
 
 from mecha.core.config import Config
+from mecha.core.errors import DetectionError
 from mecha.core.models import (
+    Budget,
     CheckStatus,
     Credential,
+    CredentialFacts,
     CredentialKind,
     Expiry,
     ExpiryState,
@@ -32,8 +37,9 @@ from mecha.core.models import (
     Reason,
     Validity,
 )
-from mecha.core.service import MechaService
+from mecha.core.service import CredentialStatus, MechaService
 from mecha.core.status import Observation, evaluate
+from mecha.linked import Tool
 from mecha.providers.base import Provider
 from mecha.store.db import Store, open_memory_store
 
@@ -68,6 +74,8 @@ class Scenario:
     subscription_days: float | None = None
     retiring: bool = False
     linked_path: str | None = None
+    facts: dict[str, Any] = field(default_factory=dict)  # phase 4 data shown in the demo
+    budget: Budget | None = None
 
 
 def _amber(code: str) -> Reason:
@@ -86,6 +94,17 @@ def _limits(remaining: int, limit: int = 4000) -> Limits:
             limit=limit, remaining=remaining, reset=DEMO_NOW + timedelta(seconds=40)
         ),
     )
+
+
+def _fact(value: object, *, source: str = "api", scope: str | None = None) -> dict[str, object]:
+    return {"value": value, "source": source, "observed_at": DEMO_NOW.isoformat(), "scope": scope}
+
+
+# A team's prepaid balance, as an xAI management key reports it (shown on its keys too).
+_TEAM_FUNDS: dict[str, Any] = {
+    "funds": _fact({"state": "ok", "amount": "42.10", "currency": "USD"}, scope="team"),
+    "account": {"prepaid_usd": _fact("42.10"), "postpaid_margin_usd": _fact("0.00")},
+}
 
 
 SCENARIOS: tuple[Scenario, ...] = (
@@ -110,6 +129,7 @@ SCENARIOS: tuple[Scenario, ...] = (
         account={"org_id": "org-demo", "models": "64"},
         tags=("prod",),
         api_expires_days=90,
+        facts={"last_used_at": _fact((DEMO_NOW - timedelta(hours=2)).isoformat())},
     ),
     Scenario(
         "Org admin",
@@ -118,6 +138,20 @@ SCENARIOS: tuple[Scenario, ...] = (
         "sk-admin-p0Z…T7ve",
         "GET /v1/organization/admin_api_keys",
         tags=("admin",),
+        budget=Budget(
+            amount=Decimal("100"), currency="USD", purchased_at=DEMO_NOW - timedelta(days=20)
+        ),
+        facts={
+            "funds_info": _fact(
+                {
+                    "amount": "63.40",
+                    "currency": "USD",
+                    "until": (DEMO_NOW - timedelta(days=1)).isoformat(),
+                },
+                source="inferred",
+                scope="organization",
+            )
+        },
     ),
     Scenario(
         "Grok team key",
@@ -127,6 +161,7 @@ SCENARIOS: tuple[Scenario, ...] = (
         "GET /v1/api-key",
         account={"team_id": "team-demo-0001", "key_name": "grok-prod"},
         tags=("prod",),
+        facts=_TEAM_FUNDS,
     ),
     Scenario(
         "xAI management",
@@ -136,6 +171,7 @@ SCENARIOS: tuple[Scenario, ...] = (
         "GET /auth/management-keys/validation",
         account={"team_id": "team-demo-0001"},
         tags=("admin",),
+        facts=_TEAM_FUNDS,
     ),
     # --- amber ---------------------------------------------------------------------
     Scenario(
@@ -360,6 +396,8 @@ def build_demo_store(scenarios: Iterable[Scenario] = SCENARIOS) -> Store:
             token_expires_at=_days(s.token_expires_days),
             subscription_until=_days(s.subscription_days),
             retiring=s.retiring,
+            manual_budget=s.budget,
+            facts=CredentialFacts.model_validate(s.facts),
         )
         store.insert(cred, None)  # no secret, ever
         if s.never_checked or cred.kind.is_oauth:
@@ -389,6 +427,12 @@ class DemoService(MechaService):
         """A credential added during the demo: a fabricated healthy check, no network."""
         _, path, _ = provider.endpoint(cred.kind)
         return Scenario(cred.label, cred.provider, cred.kind, cred.redacted, f"GET {path}")
+
+    def link(
+        self, tool: Tool, path: str | None = None, *, label: str | None = None
+    ) -> CredentialStatus:
+        # Linking would read real session files from this machine (email, plan) into a demo.
+        raise DetectionError("Demo mode does not read session files from this machine.")
 
     def is_fresh(self, cred: Credential, now: datetime) -> bool:
         return False  # every demo check "runs"

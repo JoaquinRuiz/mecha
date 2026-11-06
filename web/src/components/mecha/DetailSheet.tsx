@@ -28,13 +28,21 @@ import { Textarea } from '@/components/ui/textarea'
 import { useI18n } from '@/i18n'
 import type { MessageKey } from '@/i18n/en'
 import type { Api } from '@/lib/api'
-import type { CredentialStatus, Signal, Source } from '@/lib/types'
+import type { CredentialStatus, ProbeInfo, Signal, Source } from '@/lib/types'
 import { cn } from '@/lib/utils'
 import { Fuse, fuseModel } from './Fuse'
+import { ProbeButton, probeCostText } from './ProbeButton'
 import { StatusPill } from './StatusPill'
 import { STATUS } from './status'
 import { useToast } from './Toaster'
-import { checkedLine, fundsLine, limitsLine, providerName, reasonsLine } from './text'
+import {
+  checkedLine,
+  fundsInfoLine,
+  fundsLine,
+  limitsLine,
+  providerName,
+  reasonsLine,
+} from './text'
 
 function SourceChip({ source }: { source: Source }) {
   const { t } = useI18n()
@@ -74,12 +82,14 @@ export function DetailSheet({
   now,
   horizonDays,
   api,
+  probe,
   onClose,
 }: {
   item: CredentialStatus | null
   now: string
   api: Api
   horizonDays: number
+  probe?: ProbeInfo | null
   onClose: () => void
 }) {
   const i18n = useI18n()
@@ -92,6 +102,8 @@ export function DetailSheet({
   const [tags, setTags] = useState('')
   const [notes, setNotes] = useState('')
   const [expiry, setExpiry] = useState('')
+  const [budgetAmount, setBudgetAmount] = useState('')
+  const [budgetDate, setBudgetDate] = useState('')
 
   useEffect(() => {
     if (!item) return
@@ -99,6 +111,8 @@ export function DetailSheet({
     setTags(item.credential.tags.join(', '))
     setNotes(item.credential.notes ?? '')
     setExpiry(toDateInput(item.credential.manual_expires_at))
+    setBudgetAmount(item.credential.manual_budget?.amount ?? '')
+    setBudgetDate(toDateInput(item.credential.manual_budget?.purchased_at ?? null))
   }, [item])
 
   // History is fetched only when the sheet is open (never one request per card).
@@ -131,6 +145,31 @@ export function DetailSheet({
       toast(t('saved'))
       refresh()
     },
+    onError: (e: Error) => toast(t('failed', { message: e.message }), 'error'),
+  })
+  const toggleProbe = useMutation({
+    mutationFn: (on: boolean) => api.patch(id as string, { active_probe: on }),
+    onSuccess: refresh,
+    onError: (e: Error) => toast(t('failed', { message: e.message }), 'error'),
+  })
+  const saveBudget = useMutation({
+    mutationFn: () =>
+      api.patch(id as string, {
+        manual_budget: {
+          amount: budgetAmount,
+          currency: 'USD',
+          purchased_at: `${budgetDate}T00:00:00Z`,
+        },
+      }),
+    onSuccess: () => {
+      toast(t('budgetSaved'))
+      refresh()
+    },
+    onError: (e: Error) => toast(t('failed', { message: e.message }), 'error'),
+  })
+  const clearBudget = useMutation({
+    mutationFn: () => api.patch(id as string, { manual_budget: null }),
+    onSuccess: refresh,
     onError: (e: Error) => toast(t('failed', { message: e.message }), 'error'),
   })
   const check = useMutation({
@@ -209,6 +248,30 @@ export function DetailSheet({
                     {t('checkNow')}
                   </Button>
                 )}
+                {remote && probe && item.credential.kind === 'api_key' && (
+                  <div className="space-y-1 rounded-md border p-3" data-testid="probe-section">
+                    <ProbeButton item={item} probe={probe} api={api} now={now} size="sm" />
+                    <label className="flex items-start gap-2 text-sm">
+                      <input
+                        type="checkbox"
+                        className="mt-1"
+                        checked={item.credential.active_probe}
+                        onChange={(e) => toggleProbe.mutate(e.target.checked)}
+                      />
+                      <span>{t('probeAuto')}</span>
+                    </label>
+                    <p className="text-muted-foreground text-xs">{probeCostText(t, probe)}</p>
+                    <p className="text-muted-foreground text-xs">
+                      {t('probeMonthly', {
+                        usd: probe.usd_per_month_label,
+                        hours: probe.interval_hours,
+                      })}
+                    </p>
+                    <p className="text-muted-foreground text-xs">
+                      {t('probePrices', { date: i18n.date(probe.prices_checked) })}
+                    </p>
+                  </div>
+                )}
               </section>
 
               <section aria-label={t('signals')}>
@@ -240,7 +303,22 @@ export function DetailSheet({
                       signal={r.limits}
                     />
                   )}
+                  {r.last_used_at && (
+                    <SignalRow
+                      label={t('lastUsed', { when: '' }).trim()}
+                      value={i18n.relative(r.last_used_at.value, now)}
+                      signal={r.last_used_at}
+                    />
+                  )}
                 </dl>
+                {fundsInfoLine(i18n, item) && (
+                  <p className="mt-2 text-muted-foreground text-xs" data-testid="funds-info">
+                    {fundsInfoLine(i18n, item)}
+                  </p>
+                )}
+                {item.credential.parent_id && (
+                  <p className="mt-1 text-muted-foreground text-xs">{t('reportedBy')}</p>
+                )}
               </section>
 
               {Object.keys(r.account).length > 0 && (
@@ -303,6 +381,62 @@ export function DetailSheet({
                   </div>
                 )}
               </section>
+
+              {item.credential.provider === 'openai' && item.credential.kind === 'admin_key' && (
+                <form
+                  className="space-y-2 rounded-md border p-3"
+                  data-testid="budget-form"
+                  onSubmit={(e) => {
+                    e.preventDefault()
+                    saveBudget.mutate()
+                  }}
+                >
+                  <h3 className="font-medium text-sm">{t('budget')}</h3>
+                  <p className="text-muted-foreground text-xs">{t('budgetHint')}</p>
+                  <p className="text-amber-700 text-xs dark:text-amber-300">
+                    {t('budgetAutoRecharge')}
+                  </p>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div className="space-y-1">
+                      <Label htmlFor={`${formId}-budget`}>{t('budgetAmount')}</Label>
+                      <Input
+                        id={`${formId}-budget`}
+                        inputMode="decimal"
+                        value={budgetAmount}
+                        onChange={(e) => setBudgetAmount(e.target.value)}
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <Label htmlFor={`${formId}-budget-date`}>{t('budgetDate')}</Label>
+                      <Input
+                        id={`${formId}-budget-date`}
+                        type="date"
+                        value={budgetDate}
+                        onChange={(e) => setBudgetDate(e.target.value)}
+                      />
+                    </div>
+                  </div>
+                  <div className="flex gap-2">
+                    <Button
+                      type="submit"
+                      size="sm"
+                      disabled={!budgetAmount || !budgetDate || saveBudget.isPending}
+                    >
+                      {t('save')}
+                    </Button>
+                    {item.credential.manual_budget && (
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        onClick={() => clearBudget.mutate()}
+                      >
+                        {t('clear')}
+                      </Button>
+                    )}
+                  </div>
+                </form>
+              )}
 
               <details className="text-sm">
                 <summary className="cursor-pointer font-medium">{t('responseHeaders')}</summary>

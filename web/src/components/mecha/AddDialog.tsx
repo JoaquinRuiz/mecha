@@ -11,10 +11,12 @@ import {
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { useI18n } from '@/i18n'
 import type { Api } from '@/lib/api'
 import { ApiError } from '@/lib/session'
 import type { Detection, Kind, ProviderInfo } from '@/lib/types'
+import { EnvImportPanel, LinkPanel } from './ImportPanels'
 import { useToast } from './Toaster'
 import { providerName } from './text'
 
@@ -127,136 +129,155 @@ export function AddDialog({
             )}
           </DialogDescription>
         </DialogHeader>
-        <form
-          id={`${id}-form`}
-          className="space-y-3"
-          onSubmit={(e) => {
-            e.preventDefault()
-            if (secret.trim() && !blocked) add.mutate()
-          }}
-        >
-          <div className="space-y-1">
-            <Label htmlFor={`${id}-secret`}>{t('secret')}</Label>
-            <Input
-              id={`${id}-secret`}
-              type="password"
-              value={secret}
-              onChange={(e) => setSecret(e.target.value)}
-              autoComplete="off"
-              spellCheck={false}
-              autoCapitalize="off"
-              autoCorrect="off"
-              data-1p-ignore="true"
-              data-lpignore="true"
-              aria-describedby={`${id}-detected`}
-              className="font-mono"
-            />
-            <p id={`${id}-detected`} className="min-h-5 text-xs" aria-live="polite">
-              {detect.isPending && t('detecting')}
-              {det && det.format !== 'unknown' && det.provider && det.kind && (
-                <>
-                  {t('detected', {
-                    provider: providerName(det.provider),
-                    kind: t(`kind.${det.kind}`),
-                  })}
-                  {!det.verified && (
-                    <span className="text-muted-foreground"> · {t('formatUnverified')}</span>
+        <Tabs defaultValue="secret">
+          <TabsList>
+            <TabsTrigger value="secret">{t('tabSecret')}</TabsTrigger>
+            <TabsTrigger value="env">{t('tabEnv')}</TabsTrigger>
+            <TabsTrigger value="link">{t('tabLink')}</TabsTrigger>
+          </TabsList>
+          <TabsContent value="secret" className="space-y-3">
+            <form
+              id={`${id}-form`}
+              className="space-y-3"
+              onSubmit={(e) => {
+                e.preventDefault()
+                if (secret.trim() && !blocked) add.mutate()
+              }}
+            >
+              <div className="space-y-1">
+                <Label htmlFor={`${id}-secret`}>{t('secret')}</Label>
+                <Input
+                  id={`${id}-secret`}
+                  type="password"
+                  value={secret}
+                  onChange={(e) => setSecret(e.target.value)}
+                  autoComplete="off"
+                  spellCheck={false}
+                  autoCapitalize="off"
+                  autoCorrect="off"
+                  data-1p-ignore="true"
+                  data-lpignore="true"
+                  aria-describedby={`${id}-detected`}
+                  className="font-mono"
+                />
+                <p id={`${id}-detected`} className="min-h-5 text-xs" aria-live="polite">
+                  {detect.isPending && t('detecting')}
+                  {det && det.format !== 'unknown' && det.provider && det.kind && (
+                    <>
+                      {t('detected', {
+                        provider: providerName(det.provider),
+                        kind: t(`kind.${det.kind}`),
+                      })}
+                      {!det.verified && (
+                        <span className="text-muted-foreground"> · {t('formatUnverified')}</span>
+                      )}
+                    </>
                   )}
-                </>
+                  {det?.format === 'unknown' && t('unknownFormat')}
+                  {det?.ambiguous && ` ${t('ambiguousProvider')}`}
+                  {det?.format === 'session_file' && t('sessionFile')}
+                  {blocked && det?.format !== 'session_file' && t('refreshToken')}
+                </p>
+                {caps && (
+                  <p className="text-muted-foreground text-xs">
+                    {t('canKnow', {
+                      validate: t(`cap.${caps.validate}`),
+                      funds: t(`cap.${caps.funds}`),
+                      expiry: t(`cap.${caps.expiry}`),
+                    })}
+                  </p>
+                )}
+              </div>
+              {needsProvider && (
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1">
+                    <Label htmlFor={`${id}-provider`}>{t('provider')}</Label>
+                    <select
+                      id={`${id}-provider`}
+                      className="h-8 w-full rounded-md border bg-background px-2 text-sm"
+                      value={provider}
+                      onChange={(e) => setProvider(e.target.value)}
+                    >
+                      <option value="">—</option>
+                      {providers.map((p) => (
+                        <option key={p.id} value={p.id}>
+                          {p.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="space-y-1">
+                    <Label htmlFor={`${id}-kind`}>{t('kind')}</Label>
+                    <select
+                      id={`${id}-kind`}
+                      className="h-8 w-full rounded-md border bg-background px-2 text-sm"
+                      value={kind}
+                      onChange={(e) => setKind(e.target.value)}
+                    >
+                      <option value="">—</option>
+                      {KINDS.map((k) => (
+                        <option key={k} value={k}>
+                          {t(`kind.${k}`)}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
               )}
-              {det?.format === 'unknown' && t('unknownFormat')}
-              {det?.ambiguous && ` ${t('ambiguousProvider')}`}
-              {det?.format === 'session_file' && t('sessionFile')}
-              {blocked && det?.format !== 'session_file' && t('refreshToken')}
-            </p>
-            {caps && (
-              <p className="text-muted-foreground text-xs">
-                {t('canKnow', {
-                  validate: t(`cap.${caps.validate}`),
-                  funds: t(`cap.${caps.funds}`),
-                  expiry: t(`cap.${caps.expiry}`),
-                })}
-              </p>
-            )}
-          </div>
-          {needsProvider && (
-            <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1">
-                <Label htmlFor={`${id}-provider`}>{t('provider')}</Label>
-                <select
-                  id={`${id}-provider`}
-                  className="h-8 w-full rounded-md border bg-background px-2 text-sm"
-                  value={provider}
-                  onChange={(e) => setProvider(e.target.value)}
-                >
-                  <option value="">—</option>
-                  {providers.map((p) => (
-                    <option key={p.id} value={p.id}>
-                      {p.name}
-                    </option>
-                  ))}
-                </select>
+                <Label htmlFor={`${id}-label`}>{t('label')}</Label>
+                <Input
+                  id={`${id}-label`}
+                  value={label}
+                  onChange={(e) => setLabel(e.target.value)}
+                />
               </div>
-              <div className="space-y-1">
-                <Label htmlFor={`${id}-kind`}>{t('kind')}</Label>
-                <select
-                  id={`${id}-kind`}
-                  className="h-8 w-full rounded-md border bg-background px-2 text-sm"
-                  value={kind}
-                  onChange={(e) => setKind(e.target.value)}
-                >
-                  <option value="">—</option>
-                  {KINDS.map((k) => (
-                    <option key={k} value={k}>
-                      {t(`kind.${k}`)}
-                    </option>
-                  ))}
-                </select>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1">
+                  <Label htmlFor={`${id}-tags`}>{t('tags')}</Label>
+                  <Input
+                    id={`${id}-tags`}
+                    value={tags}
+                    placeholder={t('tagsHint')}
+                    onChange={(e) => setTags(e.target.value)}
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label htmlFor={`${id}-expiry`}>{t('manualExpiry')}</Label>
+                  <Input
+                    id={`${id}-expiry`}
+                    type="date"
+                    value={expiry}
+                    onChange={(e) => setExpiry(e.target.value)}
+                  />
+                </div>
               </div>
-            </div>
-          )}
-          <div className="space-y-1">
-            <Label htmlFor={`${id}-label`}>{t('label')}</Label>
-            <Input id={`${id}-label`} value={label} onChange={(e) => setLabel(e.target.value)} />
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-1">
-              <Label htmlFor={`${id}-tags`}>{t('tags')}</Label>
-              <Input
-                id={`${id}-tags`}
-                value={tags}
-                placeholder={t('tagsHint')}
-                onChange={(e) => setTags(e.target.value)}
-              />
-            </div>
-            <div className="space-y-1">
-              <Label htmlFor={`${id}-expiry`}>{t('manualExpiry')}</Label>
-              <Input
-                id={`${id}-expiry`}
-                type="date"
-                value={expiry}
-                onChange={(e) => setExpiry(e.target.value)}
-              />
-            </div>
-          </div>
-          {err && (
-            <p role="alert" className="text-red-600 text-sm dark:text-red-400">
-              {err.message}
-            </p>
-          )}
-        </form>
-        <DialogFooter>
-          <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
-            {t('cancel')}
-          </Button>
-          <Button
-            type="submit"
-            form={`${id}-form`}
-            disabled={!secret.trim() || add.isPending || !!blocked}
-          >
-            {t('add')}
-          </Button>
-        </DialogFooter>
+              {err && (
+                <p role="alert" className="text-red-600 text-sm dark:text-red-400">
+                  {err.message}
+                </p>
+              )}
+            </form>
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
+                {t('cancel')}
+              </Button>
+              <Button
+                type="submit"
+                form={`${id}-form`}
+                disabled={!secret.trim() || add.isPending || !!blocked}
+              >
+                {t('add')}
+              </Button>
+            </DialogFooter>
+          </TabsContent>
+          <TabsContent value="env">
+            <EnvImportPanel api={api} onDone={() => onOpenChange(false)} />
+          </TabsContent>
+          <TabsContent value="link">
+            <LinkPanel api={api} onDone={() => onOpenChange(false)} />
+          </TabsContent>
+        </Tabs>
       </DialogContent>
     </Dialog>
   )

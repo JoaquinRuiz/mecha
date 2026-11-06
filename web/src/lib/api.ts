@@ -1,5 +1,13 @@
 import { apiFetch } from './session'
-import type { CheckResult, CredentialStatus, Detection, Listing, ProviderInfo } from './types'
+import type {
+  CheckResult,
+  CredentialStatus,
+  Detection,
+  EnvEntry,
+  LinkCandidate,
+  Listing,
+  ProviderInfo,
+} from './types'
 
 export interface NewCredential {
   secret: string
@@ -15,6 +23,8 @@ export interface CredentialPatch {
   tags?: string[]
   notes?: string | null
   manual_expires_at?: string | null
+  active_probe?: boolean
+  manual_budget?: { amount: string; currency: string; purchased_at: string } | null
 }
 
 const json = (body: unknown): RequestInit => ({
@@ -53,6 +63,26 @@ export function makeApi(token: string | null) {
       ),
     checkAll: () =>
       apiFetch<{ started: boolean; total: number }>(token, '/check-all', { method: 'POST' }),
+    /** Paid active probe; 409 probe_too_soon unless `force` (after explicit confirmation). */
+    probe: (id: string, force = false) =>
+      apiFetch<CredentialStatus>(
+        token,
+        `/credentials/${encodeURIComponent(id)}/check?mode=active&force=${force}`,
+        { method: 'POST' },
+      ),
+    envPreview: (content: string) =>
+      apiFetch<{ entries: EnvEntry[] }>(token, '/import/env/preview', json({ content })),
+    envImport: (content: string, select: number[], providers: Record<number, string> = {}) =>
+      apiFetch<{
+        results: { index: number; ok: boolean; id?: string; code?: string; message?: string }[]
+      }>(token, '/import/env', json({ content, select, providers })),
+    linkCandidates: () => apiFetch<{ candidates: LinkCandidate[] }>(token, '/linked/candidates'),
+    link: (tool: string, path?: string, label?: string) =>
+      apiFetch<CredentialStatus>(
+        token,
+        '/linked',
+        json({ tool, path: path || null, label: label || null }),
+      ),
   }
 }
 

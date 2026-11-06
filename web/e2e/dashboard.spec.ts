@@ -6,8 +6,11 @@ import { expect, type Page, test } from '@playwright/test'
 const URL = readFileSync(join(import.meta.dirname, '.session-url'), 'utf8').trim()
 const BASE = URL.split('#')[0] as string
 
-/** Fail on any console error, page error or CSP violation (covers the nonce on upgrades). */
-async function guard(page: Page): Promise<string[]> {
+/**
+ * Fail on any console error, page error or CSP violation (covers the nonce on upgrades).
+ * `allow` lists console messages a test expects (e.g. the browser logging an expected 409).
+ */
+async function guard(page: Page, allow: RegExp[] = []): Promise<string[]> {
   const problems: string[] = []
   await page.addInitScript(() => {
     document.addEventListener('securitypolicyviolation', (e) => {
@@ -15,7 +18,7 @@ async function guard(page: Page): Promise<string[]> {
     })
   })
   page.on('console', (m) => {
-    if (m.type() === 'error') problems.push(m.text())
+    if (m.type() === 'error' && !allow.some((re) => re.test(m.text()))) problems.push(m.text())
   })
   page.on('pageerror', (e) => problems.push(e.message))
   return problems
@@ -194,6 +197,76 @@ test('demo: add a key and delete it in memory, with a confirm dialog focused on 
   await expect(page.getByTestId('credential-card')).toHaveCount(21)
   await sheet.getByRole('button', { name: /^Delete$|^Borrar$/ }).click()
   await confirm.getByRole('button', { name: /^Delete$|^Borrar$/ }).click()
+  await expect(page.getByTestId('credential-card')).toHaveCount(20)
+  expect(problems).toEqual([])
+})
+
+test('active probe: cost shown, hourly limit asks for confirmation (focus on Cancel)', async ({
+  page,
+}) => {
+  // The second probe within the hour gets 409 probe_too_soon by design; browsers log it.
+  const problems = await guard(page, [/status of 409 \(Conflict\)/])
+  await load(page)
+  const card = page.getByTestId('credential-card').filter({ hasText: 'Prod · chat backend' })
+  const probe = card.getByRole('button', { name: /Active probe|Sonda activa/ })
+  await expect(probe).toHaveAccessibleName(/USD per probe|USD por sonda/)
+  await probe.click()
+  await expect(page.getByText(/Probe done|Sonda hecha/).first()).toBeVisible()
+  await probe.click() // within the hour
+  const dialog = page.getByTestId('probe-dialog')
+  await expect(dialog).toBeVisible()
+  await expect(dialog.getByRole('button', { name: /^Cancel$|^Cancelar$/ })).toBeFocused()
+  await dialog.getByRole('button', { name: /Probe now|Sondear ahora/ }).click()
+  await expect(dialog).toBeHidden()
+  await card.getByRole('button', { name: 'Prod · chat backend', exact: true }).click()
+  const sheet = page.getByTestId('detail-sheet')
+  await expect(sheet.getByTestId('probe-section')).toContainText('< 0.01 USD/month')
+  await expect(sheet.getByTestId('probe-section')).toContainText(
+    /Prices checked|Precios consultados/,
+  )
+  expect(problems).toEqual([])
+})
+
+test('team balance on xAI keys and the OpenAI budget form', async ({ page }) => {
+  const problems = await guard(page)
+  await load(page)
+  await expect(
+    page.getByTestId('credential-card').filter({ hasText: 'Grok team key' }),
+  ).toContainText('$42.10 (team)')
+  await page.getByRole('button', { name: 'Org admin', exact: true }).click()
+  const sheet = page.getByTestId('detail-sheet')
+  await expect(sheet.getByTestId('budget-form')).toContainText(/auto-recharge|recarga automática/)
+  await expect(sheet.getByTestId('funds-info')).toContainText(/estimated|estimado/)
+  expect(problems).toEqual([])
+})
+
+test('import a .env from the add dialog (redacted preview, then import)', async ({ page }) => {
+  const problems = await guard(page)
+  await load(page)
+  const secret = `xai-ENVIMPORT${'z9y8x7w6'.repeat(8)}`
+  await page.keyboard.press('n')
+  const dialog = page.getByTestId('add-dialog')
+  await dialog.getByRole('tab', { name: /Import \.env|Importar \.env/ }).click()
+  const panel = dialog.getByTestId('env-panel')
+  await panel.locator('textarea').fill(`# app\nXAI_API_KEY=${secret}\nPORT=8080\n`)
+  await panel.getByRole('button', { name: /Preview|Vista previa/ }).click()
+  await expect(panel).toContainText('XAI_API_KEY')
+  // The preview shows only the redacted form (the secret is just in the field it was pasted in).
+  await expect(panel.getByRole('list')).not.toContainText(secret)
+  await expect(panel.getByRole('list')).toContainText('xai-ENV')
+  await panel.getByRole('button', { name: /Import 1|Importar 1/ }).click()
+  await expect(dialog).toBeHidden()
+  await expect(page.getByTestId('credential-card')).toHaveCount(21)
+  // leave the demo as it was
+  await page.getByRole('button', { name: 'XAI_API_KEY', exact: true }).click()
+  await page
+    .getByTestId('detail-sheet')
+    .getByRole('button', { name: /^Delete$|^Borrar$/ })
+    .click()
+  await page
+    .getByTestId('delete-dialog')
+    .getByRole('button', { name: /^Delete$|^Borrar$/ })
+    .click()
   await expect(page.getByTestId('credential-card')).toHaveCount(20)
   expect(problems).toEqual([])
 })

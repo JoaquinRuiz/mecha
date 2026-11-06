@@ -26,6 +26,10 @@ export interface Credential {
   token_expires_at: string | null
   subscription_until: string | null
   retiring: boolean
+  active_probe: boolean
+  parent_id: string | null
+  manual_budget: { amount: string; currency: string; purchased_at: string } | null
+  facts?: { funds?: { scope: string | null; by: string | null } | null }
 }
 
 export interface RateWindow {
@@ -45,6 +49,8 @@ export interface CheckResult {
   funds: Signal<{ state: string; amount: string | null; currency: string | null }>
   expiry: Signal<{ state: string; expires_at: string | null }>
   limits: Signal<{ state: string; requests: RateWindow | null; tokens: RateWindow | null }> | null
+  funds_info: Signal<{ amount: string; currency: string; until: string; estimated: boolean }> | null
+  last_used_at: Signal<string> | null
   account: Record<string, Signal<string>>
   http: {
     endpoint: string
@@ -60,6 +66,7 @@ export interface CredentialStatus {
   result: CheckResult
   cached: boolean
   last_known: { overall: Overall; checked_at: string } | null
+  probe_next_at: string | null
 }
 
 export interface DisplaySettings {
@@ -91,7 +98,18 @@ export interface Detection {
   warnings: string[]
 }
 
-export type Capability = 'yes' | 'no' | 'error_only'
+export type Capability = 'yes' | 'no' | 'error_only' | 'admin_key' | 'management_key'
+
+export interface ProbeInfo {
+  model: string
+  input_tokens: number
+  output_tokens: number
+  usd_per_probe: string
+  usd_per_month: string
+  usd_per_month_label: string
+  interval_hours: number
+  prices_checked: string
+}
 
 export interface ProviderInfo {
   id: ProviderId
@@ -100,6 +118,25 @@ export interface ProviderInfo {
   funds: Capability
   expiry: Capability
   kinds: Kind[]
+  probe: ProbeInfo | null
+}
+
+export interface EnvEntry {
+  index: number
+  line: number
+  name: string
+  redacted: string
+  provider: ProviderId | null
+  kind: Kind | null
+  ambiguous: boolean
+  duplicate_of: string | null
+  importable: boolean
+}
+
+export interface LinkCandidate {
+  tool: 'codex' | 'claude-code' | 'gemini-cli'
+  path: string
+  exists: boolean
 }
 
 export const OVERALL_ORDER: Overall[] = ['red', 'amber', 'grey', 'local', 'green']
