@@ -11,6 +11,7 @@ import logging
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 from mecha.core.config import Config
 from mecha.core.detect import Detection, detect
@@ -40,6 +41,17 @@ from mecha.core.models import (
 from mecha.core.normalize import normalize_secret
 from mecha.core.status import Observation, Thresholds, evaluate
 from mecha.core.ulid import new_ulid
+from mecha.linked import (
+    PROVIDER as LINKED_PROVIDER,
+)
+from mecha.linked import (
+    TOOLS,
+    LinkedFileError,
+    LinkedInfo,
+    Tool,
+    default_path,
+    read_linked,
+)
 from mecha.providers import get_provider
 from mecha.providers.base import ChildRef, KeyUpdate, Provider, ProviderContext, remote_kinds
 from mecha.store.db import Store
@@ -81,6 +93,38 @@ class CredentialStatus:
 
 
 ENRICHING_KINDS = frozenset({CredentialKind.admin_key, CredentialKind.management_key})
+PROVIDER_OF = LINKED_PROVIDER
+
+
+def linked_facts(facts: CredentialFacts, info: LinkedInfo, now: datetime) -> CredentialFacts:
+    """Facts from a session file (source "file", unverified). With a refresh token the CLI
+    renews the access token by itself, so its expiry is informational only."""
+    out = facts.model_copy(deep=True)
+    out.account.pop("file_error", None)
+
+    def put(key: str, value: str | None) -> None:
+        if value:
+            out.account[key] = Fact[str](value=value, source="file", observed_at=now)
+        else:
+            out.account.pop(key, None)
+
+    put("email", info.email)
+    put("plan", info.plan)
+    for key, value in info.extra.items():
+        put(key, value)
+    expiry = info.subscription_until
+    if info.has_refresh_token:
+        put(
+            "access_token_expires_at",
+            info.access_expires_at.isoformat() if info.access_expires_at else None,
+        )
+    elif info.access_expires_at and (expiry is None or info.access_expires_at < expiry):
+        expiry = info.access_expires_at
+    put("refresh_token", "present" if info.has_refresh_token else "absent")
+    out.expires_at = (
+        Fact[datetime | None](value=expiry, source="file", observed_at=now) if expiry else None
+    )
+    return out
 
 
 def apply_update(
@@ -331,6 +375,9 @@ class MechaService:
 
     def next_due(self, cred: Credential) -> datetime | None:
         """When the scheduler should check ``cred`` next (None: now)."""
+        if cred.kind is CredentialKind.oauth_file:
+            read = cred.facts.account.get("refresh_token") or cred.facts.account.get("file_error")
+            return read.observed_at + self.retry_delay(0) if read else None
         obs = self.store.last_observation(cred.id)
         if obs is None:
             return None
@@ -428,9 +475,11 @@ class MechaService:
         force_probe: bool = False,
         scheduled: bool = False,
     ) -> CredentialStatus:
+        if cred.kind is CredentialKind.oauth_file:
+            return self._status(self._refresh_linked(cred))  # re-read, never a remote call
         provider = get_provider(cred.provider)
         if provider is None or not self.is_remote(cred):
-            return self._status(cred)  # OAuth / linked: offline only, never a remote call
+            return self._status(cred)  # OAuth: offline only, never a remote call
         wants_probe = self.can_probe(cred) and (active or (scheduled and cred.active_probe))
         next_probe = self.probe_next_at(cred)
         # The scheduler never skips the hourly limit; a person may, explicitly (--force).
@@ -605,6 +654,51 @@ class MechaService:
             changes[field_name] = None
         self.store.update(cred_id, changes)
         return self.get(cred_id)
+
+    # --- linked session files ---------------------------------------------------------
+    def link(
+        self, tool: Tool, path: str | None = None, *, label: str | None = None
+    ) -> CredentialStatus:
+        """Link a CLI's OAuth session file by path (read-only; tokens are never copied)."""
+        file = Path(path).expanduser() if path else default_path(tool)
+        info = read_linked(tool, file)  # validates before storing anything
+        resolved = str(file.resolve())
+        fingerprint = self.store.cipher.fingerprint(f"linked:{resolved}")
+        existing = self.store.by_fingerprint(fingerprint)
+        if existing is not None:
+            raise DuplicateCredentialError(f"This file is already linked as {existing}.", existing)
+        home = str(Path.home())
+        shown = resolved.replace(home, "~", 1) if resolved.startswith(home) else resolved
+        cred = Credential(
+            id=new_ulid(),
+            label=(label or "").strip() or f"{tool} session",
+            provider=PROVIDER_OF[tool],
+            kind=CredentialKind.oauth_file,
+            pattern_id=f"linked:{tool}",
+            redacted=shown,
+            fingerprint=fingerprint,
+            linked_path=resolved,
+            created_at=self._now(),
+            facts=linked_facts(CredentialFacts(), info, self._now()),
+        )
+        self.store.insert(cred, None)
+        return self._status(cred)
+
+    def _refresh_linked(self, cred: Credential) -> Credential:
+        """Re-read a linked file on every check; on failure keep the last facts and flag it."""
+        tool = (cred.pattern_id or "").removeprefix("linked:")
+        if tool not in TOOLS or not cred.linked_path:
+            return cred
+        now = self._now()
+        try:
+            facts = linked_facts(cred.facts, read_linked(tool, Path(cred.linked_path)), now)
+        except LinkedFileError as exc:
+            facts = cred.facts.model_copy(deep=True)
+            facts.account["file_error"] = Fact[str](
+                value=exc.message, source="file", observed_at=now
+            )
+        self.store.set_facts(cred.id, facts)
+        return cred.model_copy(update={"facts": facts})
 
     def history(self, id_or_prefix: str, limit: int = 50) -> builtins.list[CheckResult]:
         return self.store.history(self.resolve_id(id_or_prefix), limit)

@@ -49,6 +49,7 @@ R_CHECK_FAILED = "check_failed"  # «falló la comprobación»
 R_VALIDITY_UNKNOWN = "validity_unknown"
 R_LOCAL_ONLY = "local_only"
 R_VALID = "valid"
+R_LINKED_UNREADABLE = "linked_file_unreadable"  # a linked session file is missing/unreadable
 R_PROBE_MISCONFIGURED = "probe_misconfigured"  # the probe model no longer exists (404)
 R_PROBE_UNCERTAIN = "probe_uncertain"  # a paid POST timed out after sending: maybe billed
 R_BILLING_ERROR = "billing_error"  # «problema de facturación»
@@ -248,6 +249,8 @@ def evaluate(
             facts.limits.observed_at,
         )
     notes = obs.notes if ok and obs else []
+    if cred.kind is CredentialKind.oauth_file and "file_error" in facts.account:
+        notes = [*notes, Reason(code=R_LINKED_UNREADABLE, overall=Overall.amber)]
 
     overall, reasons = compute_overall(
         kind=cred.kind,
