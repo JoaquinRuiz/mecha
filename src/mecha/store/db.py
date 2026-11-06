@@ -16,7 +16,15 @@ from importlib.resources import files
 from pathlib import Path
 
 from mecha.core.errors import MechaError, StoreCorruptError, StoreLockedError, WrongKeyError
-from mecha.core.models import Budget, CheckResult, Credential, CredentialKind, Overall, ProviderId
+from mecha.core.models import (
+    Budget,
+    CheckResult,
+    Credential,
+    CredentialFacts,
+    CredentialKind,
+    Overall,
+    ProviderId,
+)
 from mecha.core.status import Observation
 from mecha.core.ulid import new_ulid
 from mecha.store import keys
@@ -138,8 +146,8 @@ class Store:
             """INSERT INTO credentials (id, label, provider, kind, pattern_id, redacted,
                 fingerprint, secret_ct, tags, notes, linked_path, parent_id, manual_expires_at,
                 manual_budget, active_probe, token_expires_at, subscription_until, retiring,
-                created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                created_at, facts)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 cred.id,
                 cred.label,
@@ -160,6 +168,7 @@ class Store:
                 _ts(cred.subscription_until),
                 int(cred.retiring),
                 _ts(cred.created_at),
+                cred.facts.model_dump_json(),
             ),
         )
 
@@ -185,6 +194,7 @@ class Store:
             subscription_until=_dt(row["subscription_until"]),
             retiring=bool(row["retiring"]),
             created_at=datetime.fromisoformat(row["created_at"]),
+            facts=CredentialFacts.model_validate_json(row["facts"] or "{}"),
         )
 
     def all(self) -> list[Credential]:
@@ -216,7 +226,14 @@ class Store:
             return None
         return self.cipher.decrypt_secret(bytes(row["secret_ct"]), cred_id)
 
-    EDITABLE = frozenset({"label", "tags", "notes", "manual_expires_at"})
+    EDITABLE = frozenset(
+        {"label", "tags", "notes", "manual_expires_at", "active_probe", "manual_budget"}
+    )
+
+    def set_facts(self, cred_id: str, facts: CredentialFacts) -> None:
+        self.conn.execute(
+            "UPDATE credentials SET facts = ? WHERE id = ?", (facts.model_dump_json(), cred_id)
+        )
 
     def update(self, cred_id: str, changes: dict[str, object]) -> None:
         """Update editable, non-secret fields. The secret is never updatable: rotating a key
@@ -232,6 +249,10 @@ class Store:
                 values.append(json.dumps(value))
             elif key == "manual_expires_at":
                 values.append(_ts(value) if isinstance(value, datetime) else None)
+            elif key == "active_probe":
+                values.append(int(bool(value)))
+            elif key == "manual_budget":
+                values.append(value.model_dump_json() if isinstance(value, Budget) else None)
             else:
                 values.append(value)
         if cols:
