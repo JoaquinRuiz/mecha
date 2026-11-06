@@ -139,6 +139,50 @@ class Reason(BaseModel):
     overall: Overall
 
 
+class Fact[T](BaseModel):
+    """Something an API told us about a credential that must survive later checks: an
+    admin key's view of a child, a management balance, what an active probe found."""
+
+    value: T
+    source: Source
+    observed_at: datetime
+    by: str | None = None  # credential id of the admin/management key that reported it
+    scope: str | None = None  # "team" / "organization" when it is not about this key alone
+
+
+class FundsInfo(BaseModel):
+    """Informational funds (never changes the traffic light): e.g. an organization-wide
+    balance estimated from the Costs API, shown on the child keys."""
+
+    amount: Decimal
+    currency: str = "USD"
+    until: datetime  # last day included in the estimate
+    estimated: bool = True
+
+
+class ReasonFact(BaseModel):
+    """An API-reported reason that is a warning, not proof of failure (e.g. the key's owner
+    lost access to the project): it colours the card amber, never red."""
+
+    code: str
+    overall: Overall
+    observed_at: datetime
+    by: str | None = None
+
+
+class CredentialFacts(BaseModel):
+    expires_at: Fact[datetime | None] | None = None  # value None: the API says it never expires
+    status: Fact[Validity] | None = None  # e.g. revoked/blocked according to an admin API
+    last_used_at: Fact[datetime] | None = None
+    funds: Fact[Funds] | None = None  # affects the traffic light (probe, team balance, own key)
+    funds_info: Fact[FundsInfo] | None = None  # shown only, never colours the card
+    limits: Fact[Limits] | None = None  # from an active probe
+    account: dict[str, Fact[str]] = Field(default_factory=dict)
+    reasons: list[ReasonFact] = Field(default_factory=list)
+    last_probe_at: datetime | None = None
+    probe_model: str | None = None
+
+
 class Credential(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -161,6 +205,7 @@ class Credential(BaseModel):
     token_expires_at: datetime | None = None
     subscription_until: datetime | None = None
     retiring: bool = False
+    facts: CredentialFacts = Field(default_factory=CredentialFacts)
 
 
 class CheckResult(BaseModel):
@@ -174,6 +219,8 @@ class CheckResult(BaseModel):
     funds: Signal[Funds]
     expiry: Signal[Expiry]
     limits: Signal[Limits] | None = None
+    funds_info: Signal[FundsInfo] | None = None  # informational, never colours the card
+    last_used_at: Signal[datetime] | None = None
     account: dict[str, Signal[str]] = Field(default_factory=dict)
     http: HttpTrace | None = None
     error: ProviderError | None = None

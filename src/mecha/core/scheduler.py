@@ -14,6 +14,7 @@ import logging
 from collections.abc import Callable
 from datetime import datetime
 
+from mecha.core.models import CredentialKind
 from mecha.core.service import CredentialStatus, MechaService
 
 log = logging.getLogger(__name__)
@@ -34,7 +35,7 @@ class Scheduler:
     def due(self, now: datetime) -> list[str]:
         out = []
         for cred in self.service.store.all():
-            if not self.service.is_remote(cred):
+            if not self.service.is_remote(cred) and cred.kind is not CredentialKind.oauth_file:
                 continue
             due_at = self.service.next_due(cred)
             if due_at is None or now >= due_at:
@@ -46,7 +47,7 @@ class Scheduler:
         if not ids:
             return []
         log.info("scheduled passive check of %d credential(s)", len(ids))
-        return await self.service.check(ids, on_result=self.on_result)
+        return await self.service.check(ids, scheduled=True, on_result=self.on_result)
 
     async def run_forever(self) -> None:
         while True:

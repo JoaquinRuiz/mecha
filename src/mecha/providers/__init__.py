@@ -8,8 +8,13 @@ from functools import cache
 from mecha.core.models import ProviderId
 from mecha.providers.base import Provider
 
-# Providers whose plugin is wired (OpenRouter arrives in phase 4).
-ENABLED = (ProviderId.anthropic, ProviderId.openai, ProviderId.gemini, ProviderId.xai)
+ENABLED = (
+    ProviderId.anthropic,
+    ProviderId.openai,
+    ProviderId.gemini,
+    ProviderId.xai,
+    ProviderId.openrouter,
+)
 
 
 @cache

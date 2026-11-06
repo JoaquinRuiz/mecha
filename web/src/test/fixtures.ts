@@ -28,6 +28,9 @@ export function status(overrides: {
       token_expires_at: null,
       subscription_until: null,
       retiring: false,
+      active_probe: false,
+      parent_id: null,
+      manual_budget: null,
     },
     result: {
       credential_id: '01DEMO00000000000000000001',
@@ -51,11 +54,14 @@ export function status(overrides: {
         observed_at: NOW,
       },
       limits: null,
+      funds_info: null,
+      last_used_at: null,
       account: {},
       http: null,
       error: null,
     },
     cached: false,
     last_known: null,
+    probe_next_at: null,
   }
 }

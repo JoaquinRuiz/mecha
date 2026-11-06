@@ -23,8 +23,14 @@ export function reasonsLine(i18n: I18n, item: CredentialStatus, now: string): st
 
 export function fundsLine(i18n: I18n, item: CredentialStatus): string {
   const f = item.result.funds.value
-  if (f.amount !== null) return i18n.money(f.amount, f.currency)
+  if (f.amount !== null) {
+    const money = i18n.money(f.amount, f.currency)
+    return item.credential.facts?.funds?.scope === 'team'
+      ? i18n.t('fundsTeam', { amount: money })
+      : money
+  }
   if (f.state === 'empty') return i18n.t('fundsEmpty')
+  if (f.state === 'ok') return i18n.t('fundsOk')
   if (f.state === 'not_applicable') return i18n.t('fundsNotApplicable')
   return i18n.t('fundsNotAvailable')
 }
@@ -51,4 +57,14 @@ export function checkedLine(i18n: I18n, item: CredentialStatus, now: string): st
 
 export function providerName(id: string): string {
   return PROVIDER_LABEL[id] ?? id
+}
+
+/** Informational funds (an organization-wide estimate): never colours the card. */
+export function fundsInfoLine(i18n: I18n, item: CredentialStatus): string | null {
+  const info = item.result.funds_info?.value
+  if (!info) return null
+  return i18n.t('orgEstimate', {
+    amount: i18n.money(info.amount, info.currency),
+    date: i18n.date(info.until),
+  })
 }

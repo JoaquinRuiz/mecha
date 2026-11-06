@@ -83,7 +83,7 @@ async def run(provider: ProviderId, name: str, c: Credential | None = None) -> C
         router.route(host=HOSTS[provider]).mock(
             return_value=httpx.Response(fx["status"], json=fx["body"], headers=fx["headers"])
         )
-        async with make_client(plugin.allowed_hosts, FAST) as http:
+        async with make_client(plugin.routes(c.kind), FAST) as http:
             obs = await plugin.check_passive(
                 c, "secret-not-real", http, ProviderContext(now=NOW, http=FAST)
             )
@@ -156,7 +156,7 @@ async def all_network() -> None:
     assert plugin is not None
     with respx.mock as router:
         route = router.route(host="api.x.ai").mock(side_effect=httpx.ConnectTimeout("t"))
-        async with make_client(plugin.allowed_hosts, FAST) as http:
+        async with make_client(plugin.routes(CredentialKind.api_key), FAST) as http:
             obs = await plugin.check_passive(
                 cred(ProviderId.xai), "s", http, ProviderContext(now=NOW, http=FAST)
             )
@@ -287,7 +287,7 @@ async def xai_invalid() -> None:
         router.route(host="management-api.x.ai").mock(
             return_value=httpx.Response(fx["status"], json=fx["body"])
         )
-        async with make_client(plugin.allowed_hosts, FAST) as http:
+        async with make_client(plugin.routes(mgmt.kind), FAST) as http:
             obs = await plugin.check_passive(mgmt, "s", http, ProviderContext(now=NOW, http=FAST))
     assert evaluate(mgmt, obs, NOW).validity.value is Validity.invalid
 
@@ -326,6 +326,20 @@ def openrouter_empty() -> None:
     assert r.overall is Overall.red
 
 
+async def probe_404() -> None:
+    from tests.test_check import Clock
+    from tests.test_probes import test_missing_probe_model_is_misconfigured_not_invalid
+
+    await test_missing_probe_model_is_misconfigured_not_invalid(Clock())
+
+
+async def probe_timeout() -> None:
+    from tests.test_check import Clock
+    from tests.test_probes import test_probe_timeout_is_uncertain_and_never_resent
+
+    await test_probe_timeout_is_uncertain_and_never_resent(Clock())
+
+
 CASES: dict[str, Callable[[], Any]] = {
     "all-401": all_401,
     "all-403": all_403,
@@ -348,6 +362,8 @@ CASES: dict[str, Callable[[], Any]] = {
     "xai-flags": xai_flags,
     "xai-mgmt-expired": xai_mgmt_expired,
     "openrouter-empty": openrouter_empty,
+    "probe-404": probe_404,
+    "probe-timeout": probe_timeout,
 }
 
 

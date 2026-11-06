@@ -128,20 +128,16 @@ def test_check_and_history(api: tuple[TestClient, ApiContext]) -> None:
     hist = client.get(f"/api/credentials/{cid}/history?limit=5").json()["history"]
     assert len(hist) == 1
     assert hist[0]["overall"] == "green"
-    r = client.post(f"/api/credentials/{cid}/check?mode=active")
-    assert r.status_code == 400
-    assert r.json()["code"] == "not_available"
 
 
 def test_providers_only_promise_what_is_implemented(api: tuple[TestClient, ApiContext]) -> None:
     client, _ = api
     providers = {p["id"]: p for p in client.get("/api/providers").json()["providers"]}
-    assert set(providers) == {"anthropic", "openai", "gemini", "xai"}  # OpenRouter: phase 4
-    for p in providers.values():
-        assert p["funds"] in {"yes", "no", "error_only"}
-        assert p["expiry"] in {"yes", "no", "error_only"}
-    assert providers["anthropic"]["expiry"] == "no"  # admin-key enrichment is phase 4
-    assert providers["xai"]["funds"] == "no"
+    assert set(providers) == {"anthropic", "openai", "gemini", "xai", "openrouter"}
+    assert providers["anthropic"]["expiry"] == "admin_key"
+    assert providers["xai"]["funds"] == "management_key"
+    assert providers["openrouter"]["funds"] == "yes"
+    assert providers["gemini"]["expiry"] == "no"
 
 
 async def test_event_stream_ends_when_bus_closes() -> None:
@@ -245,3 +241,108 @@ def test_canary_never_leaves_through_the_api(
     assert unknown not in caplog.text
     for r_text in seen[6:12]:
         assert json.loads(r_text).keys() <= {"code", "message"}
+
+
+def test_active_probe_hourly_limit_and_force(api: tuple[TestClient, ApiContext]) -> None:
+    client, _ = api
+    cid = add(client, fake("xai-"))["credential"]["id"]
+    ok = httpx.Response(200, json={"id": "c", "choices": []})
+    with respx.mock(assert_all_called=False) as router:
+        router.get("https://api.x.ai/v1/models").mock(
+            return_value=httpx.Response(
+                200, json={"data": [{"id": "grok-4.20-0309-non-reasoning"}]}
+            )
+        )
+        post = router.post("https://api.x.ai/v1/chat/completions").mock(return_value=ok)
+        router.route(host="testserver").pass_through()
+        assert client.post(f"/api/credentials/{cid}/check?mode=active").status_code == 200
+        r = client.post(f"/api/credentials/{cid}/check?mode=active")
+        assert r.status_code == 409
+        assert r.json()["code"] == "probe_too_soon"
+        assert r.json()["next_allowed_at"]
+        assert post.call_count == 1
+        r = client.post(f"/api/credentials/{cid}/check?mode=active&force=true")  # confirmed
+        assert r.status_code == 200
+        assert post.call_count == 2
+
+
+def test_patch_probe_and_budget(api: tuple[TestClient, ApiContext]) -> None:
+    client, _ = api
+    cid = add(client, fake("sk-proj-", 100))["credential"]["id"]
+    r = client.patch(f"/api/credentials/{cid}", json={"active_probe": True})
+    assert r.json()["credential"]["active_probe"] is True
+    admin = add(client, fake("sk-admin-", 80))["credential"]["id"]
+    assert client.patch(f"/api/credentials/{admin}", json={"active_probe": True}).status_code == 422
+    budget = {"amount": "50", "currency": "usd", "purchased_at": "2026-11-01T00:00:00Z"}
+    r = client.patch(f"/api/credentials/{admin}", json={"manual_budget": budget})
+    assert r.json()["credential"]["manual_budget"]["currency"] == "USD"
+    r = client.patch(f"/api/credentials/{admin}", json={"manual_budget": None})
+    assert r.json()["credential"]["manual_budget"] is None
+
+
+def test_providers_report_probe_cost(api: tuple[TestClient, ApiContext]) -> None:
+    client, _ = api
+    providers = {p["id"]: p for p in client.get("/api/providers").json()["providers"]}
+    probe = providers["anthropic"]["probe"]
+    assert probe["model"] == "claude-haiku-5-5"
+    assert probe["usd_per_month_label"] == "< 0.01"
+    assert probe["prices_checked"] == "2026-11-06"
+    assert providers["openrouter"]["probe"] is None
+
+
+def test_env_preview_and_import(api: tuple[TestClient, ApiContext]) -> None:
+    client, _ = api
+    a, x = fake("sk-ant-api03-"), fake("xai-")
+    existing = fake("sk-proj-", 100)
+    add(client, existing)
+    content = "\n".join(
+        [
+            "# my app",
+            f"ANTHROPIC_API_KEY={a}",
+            f'export XAI_API_KEY="{x}"  ',
+            f"OPENAI_API_KEY={existing}",
+            "DATABASE_URL=postgres://x",
+            "GOOGLE_API_KEY=",
+            f"SOMETHING_ELSE=sk-ant-ort01-{body(90)}",
+        ]
+    )
+    r = client.post("/api/import/env/preview", json={"content": content})
+    entries = r.json()["entries"]
+    assert [e["name"] for e in entries] == [
+        "ANTHROPIC_API_KEY",
+        "XAI_API_KEY",
+        "OPENAI_API_KEY",
+        "SOMETHING_ELSE",
+    ]
+    assert entries[2]["duplicate_of"] is not None
+    assert not entries[2]["importable"]
+    assert not entries[3]["importable"]  # refresh token: never stored
+    for secret in (a, x, existing):
+        assert secret not in r.text
+    r = client.post("/api/import/env", json={"content": content, "select": [0, 2]})
+    results = {res["index"]: res for res in r.json()["results"]}
+    assert results[0]["ok"] is True
+    assert results[2]["ok"] is False
+    assert results[2]["code"] == "duplicate"
+    assert a not in r.text
+    labels = {
+        c["credential"]["label"] for c in client.get("/api/credentials").json()["credentials"]
+    }
+    assert "ANTHROPIC_API_KEY" in labels
+    assert "XAI_API_KEY" not in labels  # not selected
+
+
+def test_link_endpoint(api: tuple[TestClient, ApiContext], tmp_path) -> None:  # type: ignore[no-untyped-def]
+    client, _ = api
+    gemini = tmp_path / "oauth_creds.json"
+    gemini.write_text(json.dumps({"refresh_token": "1//x", "expiry_date": 1, "scope": "s"}))
+    r = client.post("/api/linked", json={"tool": "gemini-cli", "path": str(gemini)})
+    assert r.status_code == 201
+    assert r.json()["credential"]["kind"] == "oauth_file"
+    r = client.post(
+        "/api/linked", json={"tool": "gemini-cli", "path": str(tmp_path / "missing.json")}
+    )
+    assert r.status_code == 422
+    assert r.json()["code"] == "linked_file"
+    cands = client.get("/api/linked/candidates").json()["candidates"]
+    assert {c["tool"] for c in cands} == {"codex", "claude-code", "gemini-cli"}

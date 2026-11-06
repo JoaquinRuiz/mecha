@@ -16,6 +16,7 @@ import time
 import webbrowser
 from collections.abc import Callable
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Annotated, Any
 
 import typer
@@ -46,6 +47,7 @@ from mecha.core.scheduler import Scheduler
 from mecha.core.serialize import status_json
 from mecha.core.service import CredentialStatus, MechaService
 from mecha.core.status import exit_code_for
+from mecha.linked import TOOLS
 from mecha.server import BackgroundJob, create_app, generate_token
 from mecha.store.db import open_store
 
@@ -237,6 +239,11 @@ REASON_TEXT = {
     "gemini_project_invalid": "the key's project is invalid or deleted",
     "gemini_org_policy_blocked": "Gemini API blocked by an organization policy",
     "gemini_iam_denied": "the key's service account lacks permission",
+    "funds_low_estimated": "low funds (estimated)",
+    "owner_no_project_access": "its owner no longer has access to the project",
+    "probe_misconfigured": "probe misconfigured (model not found)",
+    "probe_uncertain": "probe timed out after sending (may have been billed)",
+    "linked_file_unreadable": "linked session file missing or unreadable",
     "gemini_aq_rejected": "AQ. key rejected; if it works in AI Studio, see the known AQ. issue",
 }
 
@@ -582,20 +589,38 @@ def check_cmd(
         bool, typer.Option("--strict", help="Treat grey (could not check) as failure: exit 3.")
     ] = False,
     force: Annotated[
-        bool, typer.Option("--force", help="Ignore the minimum interval and check now.")
+        bool,
+        typer.Option(
+            "--force",
+            help="Check now: ignore the minimum interval and, with --active, the one-probe-"
+            "per-hour limit (each probe costs a fraction of a cent).",
+        ),
+    ] = False,
+    active: Annotated[
+        bool,
+        typer.Option("--active", help="Use the paid active probe (API keys only; never retried)."),
     ] = False,
 ) -> None:
-    """Check credentials against their provider's free endpoint (no tokens spent).
+    """Check credentials (free endpoints by default; --active spends a fraction of a cent).
 
     Exit code (Nagios): 0 green/grey/local, 1 amber, 2 red, 3 any error; with --strict a
     grey result exits 3 (red still wins). Results younger than the minimum interval are
-    reused and marked as cached unless --force.
+    reused and marked as cached unless --force. Active probes are limited to one per
+    credential and hour; --force skips that limit explicitly.
     """
     service = _service()
     try:
-        items = service.check_sync(ids or [], force=force)
+        items = service.check_sync(
+            ids or [], force=force, active=active, force_probe=active and force
+        )
     finally:
         service.close()
+    for item in items:
+        if item.probe_next_at is not None:
+            console.print(
+                f"[yellow]{escape(item.credential.label)}:[/yellow] one active probe per hour; "
+                f"next allowed {item.probe_next_at:%H:%M} UTC (use --force to probe now)."
+            )
     code = exit_code_for([i.result.overall for i in items], strict=strict)
     _report(items, as_json=as_json, code=code)
 
@@ -649,6 +674,84 @@ def _ls_table(items: list[CredentialStatus], now: datetime, width: int) -> Table
             row.append(_why(i, now))
         table.add_row(*row)
     return table
+
+
+@app.command("link")
+@handle_errors
+def link_cmd(
+    tool: Annotated[str, typer.Argument(help="codex, claude-code or gemini-cli")],
+    path: Annotated[
+        str | None, typer.Option("--path", help="Session file (default: the tool's).")
+    ] = None,
+    label: Annotated[str | None, typer.Option(help="Display name.")] = None,
+) -> None:
+    """Link a CLI's OAuth session file by path: read-only, re-read on every check, tokens
+    never copied."""
+    if tool not in TOOLS:
+        console.print(f"[red]error:[/red] unknown tool {escape(tool)!r} (use: {', '.join(TOOLS)}).")
+        raise typer.Exit(EXIT_RED)
+    service = _service()
+    try:
+        item = service.link(tool, path, label=label)
+    finally:
+        service.close()
+    c = item.credential
+    console.print(f"[green]Linked[/green] {c.id}  {escape(c.label)}  {escape(c.redacted)}")
+    console.print(f"Status: {_status_cell(item)}")
+
+
+@app.command("import")
+@handle_errors
+def import_cmd(
+    file: Annotated[str, typer.Argument(metavar="FILE", help="A .env file.")],
+    yes: Annotated[bool, typer.Option("--yes", "-y", help="Import without asking.")] = False,
+    only: Annotated[
+        list[str] | None, typer.Option("--only", help="Variable name to import (repeatable).")
+    ] = None,
+) -> None:
+    """Import keys from a .env: shows the detected ones (redacted), then imports them."""
+    try:
+        content = Path(file).expanduser().read_text(encoding="utf-8")
+    except OSError as exc:
+        console.print(f"[red]error:[/red] cannot read {escape(file)}.")
+        raise typer.Exit(EXIT_RED) from exc
+    service = _service()
+    try:
+        entries = service.preview_env(content)
+        if not entries:
+            console.print("No credentials found in that file.")
+            return
+        table = Table(show_edge=False, pad_edge=False, header_style="bold", box=None)
+        for col in ("#", "Variable", "Key", "Detected", "Import"):
+            table.add_column(col, no_wrap=True)
+        chosen: list[int] = []
+        for e in entries:
+            wanted = e["importable"] and (not only or e["name"] in only)
+            if wanted:
+                chosen.append(int(e["index"]))  # type: ignore[call-overload]
+            reason = "yes" if wanted else ("duplicate" if e["duplicate_of"] else "no")
+            detected = f"{e['provider'] or '?'} · {e['kind'] or '?'}"
+            table.add_row(
+                str(e["line"]), escape(str(e["name"])), escape(str(e["redacted"])), detected, reason
+            )
+        out.print(table)
+        if not chosen:
+            console.print("Nothing to import.")
+            return
+        if not yes:
+            if not _interactive():
+                console.print("[red]error:[/red] refusing to import without --yes (no TTY).")
+                raise typer.Exit(EXIT_RED)
+            typer.confirm(f"Import {len(chosen)} credential(s)?", abort=True, err=True)
+        results = service.import_env(content, chosen)
+    finally:
+        service.close()
+    for res in results:
+        if res["ok"]:
+            console.print(f"[green]Imported[/green] {res['id']}")
+        else:
+            why = escape(str(res.get("message", res["code"])))
+            console.print(f"[yellow]Skipped[/yellow] #{res['index']}: {why}")
 
 
 @app.command("rm")

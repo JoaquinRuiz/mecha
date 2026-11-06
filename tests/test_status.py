@@ -287,3 +287,170 @@ def test_failed_check_keeps_offline_expiry_but_drops_remote_data() -> None:
     assert r.overall is Overall.amber
     assert r.validity.value is Validity.unknown
     assert r.account == {}
+
+
+# --- facts reported by APIs survive later checks ----------------------------------------
+
+
+def _with_facts(**facts: object) -> Credential:
+    from mecha.core.models import CredentialFacts
+
+    return _cred().model_copy(update={"facts": CredentialFacts.model_validate(facts)})
+
+
+def _passive_ok(at: datetime = NOW):
+    from mecha.core.status import Observation
+
+    return Observation(check_status=CheckStatus.ok, observed_at=at, validity=Validity.valid)
+
+
+def test_probe_out_of_funds_survives_a_later_passive_check() -> None:
+    from mecha.core.status import evaluate
+
+    probe_at = NOW - timedelta(hours=2)
+    cred = _with_facts(
+        funds={"value": {"state": "empty"}, "source": "api", "observed_at": probe_at}
+    )
+    r = evaluate(cred, _passive_ok(), NOW)  # passive knows nothing about funds
+    assert r.overall is Overall.red
+    assert r.funds.value.state is FundsState.empty
+    assert r.funds.observed_at == probe_at
+
+
+def test_api_expiry_survives_a_failed_check() -> None:
+    from mecha.core.status import Observation, evaluate
+
+    cred = _with_facts(
+        expires_at={
+            "value": NOW + timedelta(days=1),
+            "source": "api",
+            "observed_at": NOW - timedelta(hours=6),
+        }
+    )
+    failed = Observation(check_status=CheckStatus.failed, observed_at=NOW)
+    r = evaluate(cred, failed, NOW)
+    assert r.overall is Overall.amber  # expires tomorrow: stays amber, not grey
+    assert r.expiry.source == "api"
+
+
+def test_admin_status_revoked_is_red_only_when_newer_than_the_direct_check() -> None:
+    from mecha.core.status import evaluate
+
+    newer = _with_facts(
+        status={"value": "revoked", "source": "api", "observed_at": NOW, "by": "01ADMIN"}
+    )
+    assert evaluate(newer, _passive_ok(NOW - timedelta(hours=1)), NOW).overall is Overall.red
+    # Reactivated in the console: the more recent direct check wins.
+    older = _with_facts(
+        status={
+            "value": "revoked",
+            "source": "api",
+            "observed_at": NOW - timedelta(hours=2),
+            "by": "01ADMIN",
+        }
+    )
+    assert evaluate(older, _passive_ok(NOW), NOW).overall is Overall.green
+
+
+def test_reported_warnings_are_amber_never_red() -> None:
+    from mecha.core.status import evaluate
+
+    cred = _with_facts(
+        reasons=[
+            {
+                "code": "owner_no_project_access",
+                "overall": "amber",
+                "observed_at": NOW,
+                "by": "01ADMIN",
+            }
+        ]
+    )
+    r = evaluate(cred, _passive_ok(), NOW)
+    assert r.overall is Overall.amber
+    assert "owner_no_project_access" in [x.code for x in r.reasons]
+
+
+def test_org_estimate_ambers_only_the_admin_key_and_never_reds() -> None:
+    from mecha.core.models import CredentialFacts, CredentialKind
+    from mecha.core.status import evaluate
+
+    info = {
+        "value": {"amount": "-3", "currency": "USD", "until": NOW},
+        "source": "inferred",
+        "observed_at": NOW,
+        "scope": "organization",
+    }
+    admin = _cred(kind=CredentialKind.admin_key).model_copy(
+        update={"facts": CredentialFacts.model_validate({"funds_info": info})}
+    )
+    r = evaluate(admin, _passive_ok(), NOW)
+    assert r.overall is Overall.amber  # <= 0 but only an estimate: never red
+    assert "funds_low_estimated" in [x.code for x in r.reasons]
+    child = _with_facts(funds_info={**info, "by": "01ADMIN"})
+    assert evaluate(child, _passive_ok(), NOW).overall is Overall.green
+    plenty = admin.model_copy(
+        update={
+            "facts": CredentialFacts.model_validate(
+                {"funds_info": {**info, "value": {"amount": "80", "currency": "USD", "until": NOW}}}
+            )
+        }
+    )
+    assert evaluate(plenty, _passive_ok(), NOW).overall is Overall.green
+
+
+def test_newer_funds_fact_beats_older_observation() -> None:
+    from mecha.core.models import Funds
+    from mecha.core.status import Observation, evaluate
+
+    old = Observation(
+        check_status=CheckStatus.ok,
+        observed_at=NOW - timedelta(hours=3),
+        validity=Validity.valid,
+        funds=Funds(state=FundsState.empty),
+    )
+    cred = _with_facts(
+        funds={"value": {"state": "ok", "amount": "40"}, "source": "api", "observed_at": NOW}
+    )
+    assert evaluate(cred, old, NOW).funds.value.state is FundsState.ok
+
+
+def test_funds_info_is_shown_but_never_colours_the_card() -> None:
+    from mecha.core.status import evaluate
+
+    cred = _with_facts(
+        funds_info={
+            "value": {"amount": "-5", "currency": "USD", "until": NOW},
+            "source": "inferred",
+            "observed_at": NOW,
+            "scope": "organization",
+        }
+    )
+    r = evaluate(cred, _passive_ok(), NOW)
+    assert r.overall is Overall.green
+    assert r.funds_info is not None
+    assert r.funds_info.source == "inferred"
+
+
+def test_probe_rate_limit_counts_for_an_hour() -> None:
+    from mecha.core.status import evaluate
+
+    limits = {
+        "value": {"state": "throttled"},
+        "source": "api",
+        "observed_at": NOW - timedelta(minutes=30),
+    }
+    cred = _with_facts(limits=limits)
+    assert evaluate(cred, _passive_ok(), NOW).overall is Overall.amber
+    assert (
+        evaluate(
+            cred, _passive_ok(NOW + timedelta(minutes=31)), NOW + timedelta(minutes=31)
+        ).overall
+        is Overall.green
+    )
+
+
+def test_api_says_never_expires() -> None:
+    from mecha.core.status import evaluate
+
+    cred = _with_facts(expires_at={"value": None, "source": "api", "observed_at": NOW})
+    assert evaluate(cred, _passive_ok(), NOW).expiry.value.state is ExpiryState.none

@@ -56,7 +56,7 @@ def test_ls_json_schema() -> None:
     assert isinstance(creds, list)
     assert len(creds) == 1
     item = creds[0]
-    assert set(item) == {"credential", "result", "cached", "last_known"}
+    assert set(item) == {"credential", "result", "cached", "last_known", "probe_next_at"}
     assert item["result"]["overall"] == "local"
     assert item["result"]["validity"]["value"] == "not_applicable"
     assert "secret" not in json.dumps(item).lower()

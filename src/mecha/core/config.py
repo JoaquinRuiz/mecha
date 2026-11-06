@@ -65,6 +65,19 @@ class AnthropicConfig(_Section):
     version: str = "2026-10-21"
 
 
+class ProbesConfig(_Section):
+    """Active probes. `model = "auto"` picks the cheapest suitable model from the free model
+    list; set a model id to pin it. `free = true` uses the free endpoint where one exists
+    (Anthropic count_tokens, Gemini countTokens): undocumented whether it sees no-credit."""
+
+    anthropic_model: str = "auto"
+    openai_model: str = "auto"
+    gemini_model: str = "auto"
+    xai_model: str = "auto"
+    free: bool = False
+    min_interval_minutes: float = Field(60, ge=1)
+
+
 class ProvidersConfig(_Section):
     anthropic: AnthropicConfig = AnthropicConfig()
 
@@ -74,6 +87,7 @@ class Config(_Section):
     scheduler: SchedulerConfig = SchedulerConfig()
     http: HttpConfig = HttpConfig()
     providers: ProvidersConfig = ProvidersConfig()
+    probes: ProbesConfig = ProbesConfig()
 
 
 class ConfigError(MechaError):

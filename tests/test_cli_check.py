@@ -99,7 +99,7 @@ def test_check_json_schema_is_stable() -> None:
     assert data["schema_version"] == 1
     assert data["exit_code"] == code == 0
     [item] = data["credentials"]
-    assert set(item) == {"credential", "result", "cached", "last_known"}
+    assert set(item) == {"credential", "result", "cached", "last_known", "probe_next_at"}
     result = item["result"]
     assert set(result) >= {
         "credential_id",

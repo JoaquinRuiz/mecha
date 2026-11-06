@@ -26,6 +26,7 @@ from mecha.core.models import (
     Expiry,
     ExpiryState,
     Funds,
+    FundsInfo,
     FundsState,
     HttpTrace,
     Limits,
@@ -40,6 +41,7 @@ from mecha.core.models import (
 )
 
 RED_VALIDITY = {Validity.invalid, Validity.revoked, Validity.blocked}
+PROBE_LIMITS_TTL = timedelta(hours=1)
 
 # Reason codes (translated by CLI/UI).
 R_NOT_CHECKED = "not_checked"  # «sin comprobar»
@@ -47,6 +49,11 @@ R_CHECK_FAILED = "check_failed"  # «falló la comprobación»
 R_VALIDITY_UNKNOWN = "validity_unknown"
 R_LOCAL_ONLY = "local_only"
 R_VALID = "valid"
+R_FUNDS_LOW_ESTIMATED = "funds_low_estimated"  # «saldo bajo (estimado)», never red
+R_OWNER_NO_ACCESS = "owner_no_project_access"  # «su propietario ya no tiene acceso al proyecto»
+R_LINKED_UNREADABLE = "linked_file_unreadable"  # a linked session file is missing/unreadable
+R_PROBE_MISCONFIGURED = "probe_misconfigured"  # the probe model no longer exists (404)
+R_PROBE_UNCERTAIN = "probe_uncertain"  # a paid POST timed out after sending: maybe billed
 R_BILLING_ERROR = "billing_error"  # «problema de facturación»
 R_PERMISSION_DENIED = "permission_denied"  # «sin permiso»
 
@@ -71,6 +78,9 @@ class Observation(BaseModel):
     account: dict[str, str] = Field(default_factory=dict)
     account_source: dict[str, Source] = Field(default_factory=dict)
     notes: list[Reason] = Field(default_factory=list)  # provider-specific reasons
+    # Why a failed check failed, when it is more specific than "check failed".
+    failure: str | None = None
+    probe_model: str | None = None  # model used by an active probe
     http: HttpTrace | None = None
     error: ProviderError | None = None
 
@@ -95,6 +105,7 @@ def compute_overall(
     retiring: bool,
     check_status: CheckStatus,
     notes: Sequence[Reason] = (),
+    failure: str | None = None,
 ) -> tuple[Overall, list[Reason]]:
     red: list[str] = []
     # A 401 on a key whose known expiry has passed is shown as expired, not invalid.
@@ -135,15 +146,19 @@ def compute_overall(
     if check_status is CheckStatus.not_checked:
         return Overall.grey, [Reason(code=R_NOT_CHECKED, overall=Overall.grey)]
     if check_status is CheckStatus.failed:
-        return Overall.grey, [Reason(code=R_CHECK_FAILED, overall=Overall.grey)]
+        return Overall.grey, [Reason(code=failure or R_CHECK_FAILED, overall=Overall.grey)]
     if validity is Validity.valid:
         return Overall.green, [Reason(code=R_VALID, overall=Overall.green)]
     return Overall.grey, [Reason(code=R_VALIDITY_UNKNOWN, overall=Overall.grey)]
 
 
 def known_expiry(cred: Credential) -> tuple[datetime | None, Source]:
-    """Earliest expiry known offline: manual date, JWT ``exp`` or subscription end."""
+    """Earliest expiry known without a new request: manual date, JWT ``exp``, subscription
+    end, or a date an API reported earlier (kept as a fact, so a failed check keeps it)."""
     candidates: list[tuple[datetime, Source]] = []
+    api = cred.facts.expires_at
+    if api is not None and api.value is not None:
+        candidates.append((api.value, api.source))
     if cred.manual_expires_at is not None:
         candidates.append((cred.manual_expires_at, "manual"))
     if cred.token_expires_at is not None:
@@ -181,6 +196,28 @@ def evaluate(
         funds = obs.funds or Funds(state=FundsState.unknown)
         f_source, f_at = (obs.funds_source if obs.funds else "inferred"), obs.observed_at
 
+    # Facts reported earlier by an API (admin/management enrichment, an active probe, the
+    # key itself) survive later checks that know nothing about them: a passive check must
+    # not turn an "out of funds" card back to green, nor a failed check lose a known date.
+    facts = cred.facts
+    if not oauth:
+        # The most recent evidence wins: a key reactivated in the console turns green on its
+        # next direct check, even if an older admin listing still said "revoked".
+        if (
+            facts.status is not None
+            and facts.status.value in RED_VALIDITY
+            and (validity is Validity.unknown or facts.status.observed_at > v_at)
+        ):
+            validity, v_source, v_at = (
+                facts.status.value,
+                facts.status.source,
+                facts.status.observed_at,
+            )
+        if facts.funds is not None and (
+            funds.state is FundsState.unknown or facts.funds.observed_at > f_at
+        ):
+            funds, f_source, f_at = facts.funds.value, facts.funds.source, facts.funds.observed_at
+
     # Expiry: a date reported by the provider wins over offline facts; "none" (never
     # expires) only comes from the provider. The state is always recomputed at `now`.
     api_expiry = obs.expiry if obs and obs.check_status is CheckStatus.ok else None
@@ -194,7 +231,10 @@ def evaluate(
     else:
         expires_at, e_source = offline_at, offline_source
     e_state = expiry_state(expires_at, now, th)
-    if e_state is ExpiryState.unknown and api_expiry and api_expiry.state is ExpiryState.none:
+    never = (api_expiry is not None and api_expiry.state is ExpiryState.none) or (
+        facts.expires_at is not None and facts.expires_at.value is None
+    )
+    if e_state is ExpiryState.unknown and never:
         e_state, e_source = ExpiryState.none, "api"
     elif e_state is ExpiryState.unknown and api_expiry and api_expiry.state is ExpiryState.expired:
         e_state, e_source = ExpiryState.expired, "api"
@@ -202,7 +242,36 @@ def evaluate(
     check_status = obs.check_status if obs else CheckStatus.not_checked
     ok = obs is not None and obs.check_status is CheckStatus.ok
     limits = obs.limits if ok and obs else None
+    limits_source: Source = "header"
+    limits_at = obs.observed_at if obs else now
+    # A rate limit seen by an active probe is transient: it counts for an hour at most.
+    if (
+        limits is None
+        and not oauth
+        and facts.limits is not None
+        and now - facts.limits.observed_at < PROBE_LIMITS_TTL
+    ):
+        limits, limits_source, limits_at = (
+            facts.limits.value,
+            facts.limits.source,
+            facts.limits.observed_at,
+        )
     notes = obs.notes if ok and obs else []
+    if cred.kind is CredentialKind.oauth_file and "file_error" in facts.account:
+        notes = [*notes, Reason(code=R_LINKED_UNREADABLE, overall=Overall.amber)]
+    if not oauth:
+        # API-reported warnings are amber at most: red needs real proof.
+        notes = [*notes, *(Reason(code=f.code, overall=Overall.amber) for f in facts.reasons)]
+        info = facts.funds_info
+        # The organization estimate may warn on the admin key that reads the Costs API (and
+        # only there): amber «low funds (estimated)», never red, even at or below zero.
+        if (
+            info is not None
+            and info.by is None
+            and cred.kind is CredentialKind.admin_key
+            and info.value.amount < th.low_funds_usd
+        ):
+            notes = [*notes, Reason(code=R_FUNDS_LOW_ESTIMATED, overall=Overall.amber)]
 
     overall, reasons = compute_overall(
         kind=cred.kind,
@@ -213,6 +282,7 @@ def evaluate(
         retiring=cred.retiring,
         check_status=check_status,
         notes=notes,
+        failure=obs.failure if obs and not ok else None,
     )
     checked_at = obs.observed_at if obs else now
     return CheckResult(
@@ -230,14 +300,39 @@ def evaluate(
             observed_at=obs.observed_at if obs and e_source == "api" else now,
         ),
         limits=(
-            Signal[Limits](value=limits, source="header", observed_at=obs.observed_at)
-            if limits and obs
+            Signal[Limits](value=limits, source=limits_source, observed_at=limits_at)
+            if limits
             else None
         ),
-        account=_account(obs),
+        funds_info=(
+            Signal[FundsInfo](
+                value=facts.funds_info.value,
+                source=facts.funds_info.source,
+                observed_at=facts.funds_info.observed_at,
+            )
+            if facts.funds_info and not oauth
+            else None
+        ),
+        last_used_at=(
+            Signal[datetime](
+                value=facts.last_used_at.value,
+                source=facts.last_used_at.source,
+                observed_at=facts.last_used_at.observed_at,
+            )
+            if facts.last_used_at
+            else None
+        ),
+        account={**_fact_account(cred), **_account(obs)},
         http=obs.http if obs else None,
         error=obs.error if obs else None,
     )
+
+
+def _fact_account(cred: Credential) -> dict[str, Signal[str]]:
+    return {
+        k: Signal[str](value=f.value, source=f.source, observed_at=f.observed_at)
+        for k, f in cred.facts.account.items()
+    }
 
 
 def _account(obs: Observation | None) -> dict[str, Signal[str]]:

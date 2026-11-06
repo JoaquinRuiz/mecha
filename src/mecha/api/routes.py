@@ -14,13 +14,14 @@ import logging
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from datetime import datetime
+from decimal import Decimal
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
-from mecha.core.capabilities import load_capabilities
+from mecha.core.capabilities import load_capabilities, load_probes, month_label
 from mecha.core.errors import (
     AmbiguousProviderError,
     DetectionError,
@@ -30,9 +31,10 @@ from mecha.core.errors import (
     StoreLockedError,
 )
 from mecha.core.events import EventBus
-from mecha.core.models import CredentialKind, ProviderId
+from mecha.core.models import Budget, CredentialKind, ProviderId
 from mecha.core.serialize import SCHEMA_VERSION, status_json
 from mecha.core.service import CredentialStatus, MechaService
+from mecha.linked import TOOLS, LinkedFileError, default_path
 from mecha.providers import ENABLED
 
 log = logging.getLogger(__name__)
@@ -74,13 +76,37 @@ class CredentialIn(SecretIn):
     manual_expires_at: datetime | None = None
 
 
+class BudgetIn(Strict):
+    amount: Decimal = Field(gt=0, le=Decimal("1000000"))
+    currency: str = Field("USD", min_length=3, max_length=3)
+    purchased_at: datetime
+
+
 class CredentialPatch(Strict):
-    """Editable fields. ``null`` clears notes or the manual expiry. No secret field."""
+    """Editable fields. ``null`` clears notes, the manual expiry or the budget. No secret:
+    rotating a key means deleting it and adding the new one."""
 
     label: str | None = Field(None, max_length=200)
     tags: list[Annotated[str, Field(max_length=64)]] | None = Field(None, max_length=50)
     notes: str | None = Field(None, max_length=4000)
     manual_expires_at: datetime | None = None
+    active_probe: bool | None = None
+    manual_budget: BudgetIn | None = None
+
+
+class LinkIn(Strict):
+    tool: Literal["codex", "claude-code", "gemini-cli"]
+    path: str | None = Field(None, max_length=4096)
+    label: str | None = Field(None, max_length=200)
+
+
+class EnvIn(Strict):
+    content: str = Field(min_length=1, max_length=60_000)
+
+
+class EnvImportIn(EnvIn):
+    select: list[int] = Field(max_length=500)
+    providers: dict[int, ProviderId] = Field(default_factory=dict)
 
 
 ERROR_STATUS: list[tuple[type[MechaError], int]] = [
@@ -89,6 +115,7 @@ ERROR_STATUS: list[tuple[type[MechaError], int]] = [
     (AmbiguousProviderError, 422),
     (DetectionError, 422),
     (StoreLockedError, 503),
+    (LinkedFileError, 422),
 ]
 
 
@@ -152,7 +179,19 @@ async def detect(body: SecretIn) -> dict[str, Any]:
 async def patch_credential(request: Request, cred_id: str, body: CredentialPatch) -> dict[str, Any]:
     ctx = _ctx(request)
     sent = body.model_fields_set
-    clear = [f for f in ("notes", "manual_expires_at") if f in sent and getattr(body, f) is None]
+    clear = [
+        f
+        for f in ("notes", "manual_expires_at", "manual_budget")
+        if f in sent and getattr(body, f) is None
+    ]
+    budget = body.manual_budget
+    manual_budget = (
+        Budget(
+            amount=budget.amount, currency=budget.currency.upper(), purchased_at=budget.purchased_at
+        )
+        if budget is not None
+        else None
+    )
     item = ctx.service.update(
         cred_id,
         label=body.label if "label" in sent else None,
@@ -161,6 +200,8 @@ async def patch_credential(request: Request, cred_id: str, body: CredentialPatch
         manual_expires_at=body.manual_expires_at
         if "manual_expires_at" in sent and body.manual_expires_at is not None
         else None,
+        active_probe=body.active_probe if "active_probe" in sent else None,
+        manual_budget=manual_budget,
         clear=clear,
     )
     _changed(ctx, item.credential.id)
@@ -182,13 +223,22 @@ async def check_credential(
     mode: Literal["passive", "active"] = "passive",
     force: bool = False,
 ) -> Any:
+    """``mode=active`` spends a fraction of a cent; one probe per hour unless ``force``
+    (the UI asks for explicit confirmation first)."""
     ctx = _ctx(request)
-    if mode == "active":
+    active = mode == "active"
+    [item] = await ctx.service.check(
+        [cred_id], force=force, active=active, force_probe=active and force
+    )
+    if active and item.probe_next_at is not None:
         return JSONResponse(
-            {"code": "not_available", "message": "Active probes arrive in phase 4."},
-            status_code=400,
+            {
+                "code": "probe_too_soon",
+                "message": "One active probe per hour. Confirm to probe again now.",
+                "next_allowed_at": item.probe_next_at.isoformat(),
+            },
+            status_code=409,
         )
-    [item] = await ctx.service.check([cred_id], force=force)
     _changed(ctx, item.credential.id)
     return status_json(item)
 
@@ -231,10 +281,45 @@ async def history(
     return {"history": [r.model_dump(mode="json") for r in results]}
 
 
+@router.post("/linked", status_code=201)
+async def link(request: Request, body: LinkIn) -> dict[str, Any]:
+    """Link a CLI's OAuth session file by path: read-only, tokens never copied."""
+    ctx = _ctx(request)
+    item = ctx.service.link(body.tool, body.path, label=body.label)
+    _changed(ctx, item.credential.id)
+    return status_json(item)
+
+
+@router.get("/linked/candidates")
+async def linked_candidates() -> dict[str, Any]:
+    """Default session file paths and whether they exist (offered directly in the UI)."""
+    out = []
+    for tool in TOOLS:
+        path = default_path(tool)
+        out.append({"tool": tool, "path": str(path), "exists": path.is_file()})
+    return {"candidates": out}
+
+
+@router.post("/import/env/preview")
+async def import_env_preview(request: Request, body: EnvIn) -> dict[str, Any]:
+    """Detected entries of a pasted .env, redacted. Nothing is stored."""
+    return {"entries": _ctx(request).service.preview_env(body.content)}
+
+
+@router.post("/import/env")
+async def import_env(request: Request, body: EnvImportIn) -> dict[str, Any]:
+    ctx = _ctx(request)
+    results = ctx.service.import_env(body.content, body.select, body.providers)
+    if any(r["ok"] for r in results):
+        _changed(ctx)
+    return {"results": results}
+
+
 @router.get("/providers")
-async def providers() -> dict[str, Any]:
-    """Capability matrix, limited to what is implemented today (no promises)."""
-    implemented = {"yes", "error_only", "no"}
+async def providers(request: Request) -> dict[str, Any]:
+    """Capability matrix, limited to what is implemented (no promises), with the estimated
+    cost of an active probe (dated price table) per probe and per month."""
+    implemented = {"yes", "error_only", "no", "admin_key", "management_key"}
     out = []
     for pid, caps in load_capabilities().items():
         if pid not in ENABLED:
@@ -248,9 +333,32 @@ async def providers() -> dict[str, Any]:
                 "funds": caps.funds if caps.funds in implemented else "no",
                 "expiry": caps.expiry if caps.expiry in implemented else "no",
                 "kinds": sorted(k.value for k in caps.passive),
+                "probe": _probe_info(pid, request),
             }
         )
     return {"providers": out}
+
+
+def _probe_info(pid: ProviderId, request: Request) -> dict[str, Any] | None:
+    probe = load_probes().get(pid)
+    if probe is None:
+        return None
+    ctx: ApiContext | None = getattr(request.app.state, "api", None)
+    hours = ctx.service.config.scheduler.interval_hours if ctx else 6.0
+    monthly = probe.usd_per_month(hours)
+    return {
+        "endpoint": probe.endpoint,
+        "model": probe.default_model,
+        "input_tokens": probe.input_tokens,
+        "output_tokens": probe.output_tokens,
+        "usd_per_probe": str(probe.usd_per_probe()),
+        "usd_per_month": str(monthly),
+        "usd_per_month_label": month_label(monthly),
+        "interval_hours": hours,
+        "prices_checked": probe.prices_checked.isoformat(),
+        "prices_source": probe.prices_source,
+        "free_probe": probe.free_probe,
+    }
 
 
 @router.get("/events")

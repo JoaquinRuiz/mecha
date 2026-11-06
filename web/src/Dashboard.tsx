@@ -236,6 +236,7 @@ export function Dashboard({ token }: { token: string }) {
 
   const selectedItem = items.find((i) => i.credential.id === selected) ?? null
   const providerList = providers.data?.providers ?? []
+  const probes = Object.fromEntries(providerList.map((p) => [p.id, p.probe]))
 
   return (
     <div className="min-h-svh">
@@ -416,6 +417,8 @@ export function Dashboard({ token }: { token: string }) {
                 item={item}
                 now={now}
                 horizonDays={horizonDays}
+                probe={probes[item.credential.provider] ?? null}
+                api={api}
                 onOpen={setSelected}
                 onCheck={checkOne}
                 checking={checking.has(item.credential.id) || progress !== null}
@@ -439,6 +442,7 @@ export function Dashboard({ token }: { token: string }) {
             now={now}
             horizonDays={horizonDays}
             api={api}
+            probe={probes[selectedItem.credential.provider] ?? null}
             onClose={() => setSelected(null)}
           />
         )}

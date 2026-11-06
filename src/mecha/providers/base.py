@@ -11,11 +11,19 @@ import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from typing import Any, Protocol
 
 import httpx
 
-from mecha.core.http import DisallowedRequestError, Exchange, HttpSettings, NetworkError, send
+from mecha.core.http import (
+    DisallowedRequestError,
+    Exchange,
+    HttpSettings,
+    NetworkError,
+    Route,
+    send,
+)
 from mecha.core.models import (
     CheckStatus,
     Credential,
@@ -23,6 +31,7 @@ from mecha.core.models import (
     Expiry,
     ExpiryState,
     Funds,
+    FundsInfo,
     FundsState,
     HttpTrace,
     Limits,
@@ -53,6 +62,12 @@ class ProviderContext:
     now: datetime
     http: HttpSettings = field(default_factory=HttpSettings)
     anthropic_version: str = "2026-10-21"
+    # Active probes: a pinned model ("auto" = cheapest from the free model list), the model
+    # used last time (reused to avoid listing models on every probe), and free mode.
+    probe_model: str = "auto"
+    cached_probe_model: str | None = None
+    probe_free: bool = False
+    low_funds_usd: Decimal = Decimal("5")
 
 
 class Provider(Protocol):
@@ -63,9 +78,26 @@ class Provider(Protocol):
         """Free passive endpoint for ``kind``: (base URL, path, query params)."""
         ...
 
+    def routes(self, kind: CredentialKind) -> tuple[Route, ...]:
+        """The closed list of method + host + path this credential kind may request."""
+        ...
+
     async def check_passive(
         self, cred: Credential, secret: str, http: httpx.AsyncClient, ctx: ProviderContext
     ) -> Observation: ...
+
+    async def check_active(
+        self, cred: Credential, secret: str, http: httpx.AsyncClient, ctx: ProviderContext
+    ) -> Observation: ...
+
+    async def enrich(
+        self,
+        admin: Credential,
+        secret: str,
+        children: list[ChildRef],
+        http: httpx.AsyncClient,
+        ctx: ProviderContext,
+    ) -> Enrichment: ...
 
 
 @dataclass
@@ -228,12 +260,43 @@ def observation(
 def failed(now: datetime, endpoint: str, exc: Exception) -> Observation:
     status = exc.status if isinstance(exc, NetworkError) else None
     code = "disallowed_request" if isinstance(exc, DisallowedRequestError) else "network"
+    uncertain = isinstance(exc, NetworkError) and exc.uncertain
     return Observation(
         check_status=CheckStatus.failed,
         observed_at=now,
         http=HttpTrace(endpoint=endpoint, status=status, latency_ms=None),
         error=ProviderError(code=code, message=redact_text(str(exc))),
+        # A paid POST that timed out after sending may have been billed: never retried.
+        failure="probe_uncertain" if uncertain else None,
     )
+
+
+def probe_misconfigured(now: datetime, http: HttpTrace | None, model: str) -> Observation:
+    """The probe model no longer exists (404): a configuration problem, not a bad key."""
+    return Observation(
+        check_status=CheckStatus.failed,
+        observed_at=now,
+        http=http,
+        failure="probe_misconfigured",
+        probe_model=model,
+        error=ProviderError(code="model_not_found", message=f"Probe model {model!r} not found."),
+    )
+
+
+def probe_observation(
+    finding: Finding,
+    *,
+    now: datetime,
+    http: HttpTrace | None,
+    limits: Limits | None,
+    model: str,
+    paid: bool,
+) -> Observation:
+    """A successful paid probe proves the key can spend: funds are at least "ok"."""
+    if paid and finding.understood and finding.funds is None and finding.validity is Validity.valid:
+        finding.funds = FundsState.ok
+    obs = observation(finding, now=now, http=http, limits=limits)
+    return obs.model_copy(update={"mode": "active", "probe_model": model})
 
 
 async def request(
@@ -244,11 +307,14 @@ async def request(
     *,
     headers: dict[str, str],
     params: dict[str, str | int] | None = None,
+    json: object | None = None,
 ) -> Exchange | Observation:
     """Send a request; on failure return a grey Observation instead of raising."""
     endpoint = f"{method} {httpx.URL(url).copy_with(query=None)}"
     try:
-        return await send(http, method, url, headers=headers, params=params, settings=ctx.http)
+        return await send(
+            http, method, url, headers=headers, params=params, json=json, settings=ctx.http
+        )
     except (NetworkError, DisallowedRequestError) as exc:
         if isinstance(exc, DisallowedRequestError):
             log.error("blocked outbound request: %s", exc)
@@ -267,3 +333,69 @@ def remote_kinds() -> frozenset[CredentialKind]:
     return frozenset(
         {CredentialKind.api_key, CredentialKind.admin_key, CredentialKind.management_key}
     )
+
+
+# --- Enrichment (admin / management keys) ---------------------------------------------
+
+
+@dataclass
+class ChildRef:
+    """A stored key that an admin/management key may describe. ``secret`` is decrypted in
+    memory only for hint matching; ``account`` holds what its own checks reported."""
+
+    credential: Credential
+    secret: str | None
+    account: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass
+class KeyUpdate:
+    """Facts to store for one credential, all reported by an API."""
+
+    status: Validity | None = None
+    expires_at: datetime | None = None
+    never_expires: bool = False
+    last_used_at: datetime | None = None
+    funds: Funds | None = None  # colours the card (team balance, the key's own credit)
+    funds_scope: str | None = None
+    funds_source: Source = "api"
+    funds_info: FundsInfo | None = None  # shown only (an organization-wide estimate)
+    account: dict[str, str] = field(default_factory=dict)
+    warnings: list[str] = field(default_factory=list)  # amber reason codes (not proof)
+
+
+@dataclass
+class Enrichment:
+    children: dict[str, KeyUpdate] = field(default_factory=dict)
+    own: KeyUpdate = field(default_factory=KeyUpdate)
+    ambiguous: int = 0  # hints matching several stored keys: none of them enriched
+    error: ProviderError | None = None  # partial failure (what was read is still applied)
+
+
+async def read_json(
+    http: httpx.AsyncClient,
+    ctx: ProviderContext,
+    url: str,
+    headers: dict[str, str],
+    params: dict[str, str | int] | None = None,
+) -> dict[str, Any] | ProviderError:
+    result = await request(http, ctx, "GET", url, headers=headers, params=params)
+    if isinstance(result, Observation):
+        return result.error or ProviderError(code="network", message="request failed")
+    body = json_body(result.response)
+    if not result.response.is_success or body is None:
+        message = None
+        if body and isinstance(body.get("error"), dict):
+            message = body["error"].get("message")
+        return provider_error(f"http_{result.response.status_code}", message)
+    return body
+
+
+def funds_from_usd(amount: Decimal, low_usd: Decimal) -> Funds:
+    if amount <= 0:
+        state = FundsState.empty
+    elif amount < low_usd:
+        state = FundsState.low
+    else:
+        state = FundsState.ok
+    return Funds(state=state, amount=amount, currency="USD")
