@@ -509,9 +509,9 @@ Decisiones de la fase:
 - **Ficheros vinculados.** Claude Code en macOS: si el fichero existe en la ruta por defecto o en `--path`, se lee; el Llavero queda fuera de la v1 y solo se menciona cuando no hay fichero. Un fichero que desaparece pone la tarjeta en ámbar.
 - **Importar `.env`.** Vista previa sin estado con las claves ya redactadas para elegir cuáles importar; el servidor no guarda nada entre la vista previa y la importación.
 
-- [ ] Una admin key de OpenAI rellena `expires_at` y `last_used_at` de las project keys guardadas.
-- [ ] Una clave de gestión de xAI muestra el saldo prepago en USD.
-- [ ] Un fichero de Codex vinculado muestra plan y fin de suscripción sin copiar tokens.
+- [x] Una admin key de OpenAI rellena `expires_at` y `last_used_at` de las project keys guardadas.
+- [x] Una clave de gestión de xAI muestra el saldo prepago en USD.
+- [x] Un fichero de Codex vinculado muestra plan y fin de suscripción sin copiar tokens.
 
 ### Fase 5 · Distribución
 
