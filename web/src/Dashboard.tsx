@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { LayoutGrid, Moon, Plus, Search, Sun, Table2 } from 'lucide-react'
+import { Languages, LayoutGrid, Moon, Plus, Search, Sun, Table2 } from 'lucide-react'
 import {
   lazy,
   Suspense,
@@ -19,7 +19,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
-import { useI18n } from '@/i18n'
+import { useI18n, useSetLang } from '@/i18n'
 import { makeApi } from '@/lib/api'
 import { connectEvents } from '@/lib/events'
 import { type CredentialStatus, DEFAULT_SETTINGS, OVERALL_ORDER, type Overall } from '@/lib/types'
@@ -70,6 +70,7 @@ const isTyping = (target: EventTarget | null) =>
 
 export function Dashboard({ token }: { token: string }) {
   const i18n = useI18n()
+  const setLang = useSetLang()
   const { t } = i18n
   const toast = useToast()
   const qc = useQueryClient()
@@ -296,6 +297,18 @@ export function Dashboard({ token }: { token: string }) {
               aria-label={`${t('theme')}: ${theme === 'dark' ? t('themeLight') : t('themeDark')}`}
             >
               {theme === 'dark' ? <Sun aria-hidden="true" /> : <Moon aria-hidden="true" />}
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              data-testid="lang-toggle"
+              lang={i18n.lang === 'es' ? 'en' : 'es'}
+              onClick={() => setLang(i18n.lang === 'es' ? 'en' : 'es')}
+              // The name contains the visible code (voice control) and the language's own name.
+              aria-label={i18n.lang === 'es' ? 'EN · English' : 'ES · Español'}
+            >
+              <Languages aria-hidden="true" />
+              {i18n.lang === 'es' ? 'EN' : 'ES'}
             </Button>
             <Button
               size="sm"

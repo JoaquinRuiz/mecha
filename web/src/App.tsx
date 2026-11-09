@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { Footer } from '@/components/mecha/Footer'
 import { Button } from '@/components/ui/button'
 import { Dashboard } from '@/Dashboard'
 import { useI18n } from '@/i18n'
@@ -45,6 +46,7 @@ export function App({ token = initSessionToken() }: { token?: string | null }) {
       <>
         {StaticBanner && <StaticBanner />}
         <Dashboard token={token} />
+        <Footer />
       </>
     )
   }

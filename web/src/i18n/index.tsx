@@ -1,4 +1,4 @@
-import { createContext, type ReactNode, useContext, useMemo } from 'react'
+import { createContext, type ReactNode, useCallback, useContext, useMemo, useState } from 'react'
 import { en, type MessageKey } from './en'
 import { es } from './es'
 
@@ -73,9 +73,32 @@ export function makeI18n(lang: Lang): I18n {
 
 const I18nContext = createContext<I18n>(makeI18n('en'))
 
-export function I18nProvider({ lang, children }: { lang: Lang; children: ReactNode }) {
+export const LANG_KEY = 'mecha.lang'
+
+/** Change the language, remember it in this browser and update <html lang>. */
+const SetLangContext = createContext<(lang: Lang) => void>(() => {})
+
+export function I18nProvider({ lang: initial, children }: { lang: Lang; children: ReactNode }) {
+  const [lang, setLangState] = useState<Lang>(initial)
   const value = useMemo(() => makeI18n(lang), [lang])
-  return <I18nContext.Provider value={value}>{children}</I18nContext.Provider>
+  const setLang = useCallback((next: Lang) => {
+    setLangState(next)
+    document.documentElement.lang = next
+    try {
+      window.localStorage.setItem(LANG_KEY, next)
+    } catch {
+      // storage blocked: the choice lasts for this page only
+    }
+  }, [])
+  return (
+    <SetLangContext.Provider value={setLang}>
+      <I18nContext.Provider value={value}>{children}</I18nContext.Provider>
+    </SetLangContext.Provider>
+  )
+}
+
+export function useSetLang(): (lang: Lang) => void {
+  return useContext(SetLangContext)
 }
 
 export function useI18n(): I18n {

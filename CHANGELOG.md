@@ -4,6 +4,14 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- Language switch (EN/ES) next to the theme toggle, remembered in the browser; the
+  browser's language is still the default. In the app and the web demo.
+- Footer crediting the author, with links to YouTube, GitHub and his books.
+
 ## [0.1.1] - 2026-11-09
 
 ### Added
