@@ -71,6 +71,18 @@ gif: build-web
     pnpm -C web exec playwright test --config e2e/gif.config.ts
     uv run python scripts/make_gif.py web/test-results/gif docs/demo.gif
 
+# Refresh the web demo data from demo mode (web/src/demo/data.json)
+demo-data:
+    uv run python scripts/dump_demo.py
+
+# Build and test the static web demo for GitHub Pages (needs Playwright's Chromium)
+pages: build-web
+    uv run python scripts/dump_demo.py --check
+    pnpm -C web build:pages
+    uv run python scripts/check_web_builds.py
+    pnpm -C web size:pages
+    pnpm -C web e2e:pages
+
 # Build and serve the packaged frontend
 serve: build-web
     uv run mecha serve

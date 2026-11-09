@@ -17,6 +17,10 @@
 [![xAI](https://img.shields.io/badge/xAI-000000?logo=x&logoColor=white)](#what-each-provider-tells-mecha)
 [![OpenRouter](https://img.shields.io/badge/OpenRouter-6566F1?logo=openrouter&logoColor=white)](#what-each-provider-tells-mecha)
 
+[![Try it in your browser](https://img.shields.io/badge/%E2%96%B6%20Try%20it%20in%20your%20browser-no%20install-f59e0b?style=for-the-badge)](https://joaquinruiz.github.io/mecha/)
+
+[Read the launch post (in Spanish)](https://jokiruiz.com/inteligencia-artificial/mecha-api-keys-saldo-caducidad/)
+
 </div>
 
 Mecha is a local-first dashboard (web + CLI) that tells you at a glance how much life each of your AI credentials has left: whether it works, whether it has funds, when it expires and what kind of key it is. It covers Anthropic, OpenAI, Google Gemini, xAI and OpenRouter, plus the session files of Codex, Claude Code and Gemini CLI.
@@ -27,6 +31,8 @@ Mecha is a local-first dashboard (web + CLI) that tells you at a glance how much
 > **Alpha.** See [SPEC.md](SPEC.md) (in Spanish) for the full design.
 
 ## Install
+
+**Just looking?** [Try the web demo](https://joaquinruiz.github.io/mecha/): made-up data, runs entirely in your browser and sends nothing anywhere (its Content Security Policy forbids any connection). It never asks you to paste a key.
 
 Mecha needs Python 3.12+. The easiest way is [uv](https://docs.astral.sh/uv/):
 
@@ -118,10 +124,13 @@ just lint     # ruff, mypy, biome, tsc, README capability table
 just e2e      # Playwright against `mecha serve --demo` (needs `pnpm -C web exec playwright install chromium`)
 just build    # vite build -> src/mecha/static, then uv build; checks the UI is in the wheel and sdist
 just gif      # re-record docs/demo.gif from demo mode (needs ffmpeg)
+just pages    # build and test the static web demo (web/dist-pages)
 uv run mecha serve   # serve the built UI on http://127.0.0.1:7878
 ```
 
 Each server start generates a random session token and opens `http://127.0.0.1:7878/#t=<token>`. The page keeps the token in `sessionStorage` (so reloads work) and sends it as `Authorization: Bearer`. Every `/api/*` request without it gets `401`, and any `Host` other than `127.0.0.1:<port>` or `localhost:<port>` gets `400`.
+
+The web demo on GitHub Pages is the same frontend built with `vite.pages.config.ts`: the modules that talk to the local server are swapped for in-memory versions with the same interface (`web/src/demo`), replaying answers that `scripts/dump_demo.py` records from `mecha serve --demo`. CI checks that the data is current, that the real app contains no demo code and that the demo contains no `/api` client. It is deployed on every release.
 
 The README capability table is generated from `src/mecha/data/capabilities.toml` (`uv run python scripts/gen_capabilities.py`); CI fails if it is out of date.
 

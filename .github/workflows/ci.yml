@@ -112,6 +112,43 @@ jobs:
         shell: bash
         run: uv run --no-project scripts/smoke_install.py dist/mecha_keys-*-py3-none-any.whl
 
+  web-demo:
+    name: web demo (static build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115  # v6.1.1
+        with:
+          package_json_file: web/package.json
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7.1.0
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2  # v10.3.3
+        with:
+          enable-cache: true
+      - run: pnpm -C web install --frozen-lockfile
+      - run: uv sync --locked
+      - name: Demo data matches mecha serve --demo
+        run: uv run python scripts/dump_demo.py --check
+      - name: Build the real app and the web demo
+        run: |
+          pnpm -C web build
+          pnpm -C web build:pages
+      - name: The real app has no demo code; the demo has no /api client and a strict CSP
+        run: uv run python scripts/check_web_builds.py
+      - run: pnpm -C web size:pages
+      - run: pnpm -C web exec playwright install --with-deps chromium
+      - name: Playwright against the static build (no request leaves the demo)
+        run: pnpm -C web e2e:pages
+      - if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: playwright-traces-web-demo
+          path: web/test-results/
+          retention-days: 7
+
   e2e:
     name: e2e (demo mode, Chromium)
     runs-on: ubuntu-latest

@@ -4,6 +4,15 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.1.1] - unreleased
+
+### Added
+
+- Web demo on GitHub Pages (https://joaquinruiz.github.io/mecha/): the dashboard with
+  made-up data, in the browser, with no install. Its data comes from demo mode, it never
+  asks for a key ("Add" offers sample keys) and its CSP forbids any connection.
+- README: a link to the web demo and to the launch post (in Spanish).
+
 ## [0.1.0] - 2026-11-09
 
 First public release (alpha).
@@ -23,4 +32,5 @@ First public release (alpha).
   a redacted preview.
 - `mecha export` / `mecha restore`: encrypted backups with their own passphrase.
 
+[0.1.1]: https://github.com/JoaquinRuiz/mecha/releases/tag/v0.1.1
 [0.1.0]: https://github.com/JoaquinRuiz/mecha/releases/tag/v0.1.0
