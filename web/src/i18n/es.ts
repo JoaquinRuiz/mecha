@@ -158,6 +158,13 @@ export const es: Record<MessageKey, string> = {
   add: 'Añadir',
   added: 'Añadida «{label}»',
   demoAddHint: 'Modo demo: solo se guarda la forma redactada, nunca el secreto.',
+  staticBanner: 'Demo web con datos inventados: no envía nada a ningún sitio.',
+  staticBannerInstall: 'Para usar tus claves:',
+  copyCommand: 'Copiar el comando',
+  copied: 'Copiado',
+  samplePickHint:
+    'Elige una clave de ejemplo. La demo web nunca te pide pegar una real: para eso, instala Mecha.',
+  staticNotAvailable: 'No disponible en la demo web: instala Mecha (uvx mecha-keys).',
   failed: 'Algo ha fallado: {message}',
   checkAllStarted: 'Comprobando {count}',
   'plural.credential.one': '# credencial',
