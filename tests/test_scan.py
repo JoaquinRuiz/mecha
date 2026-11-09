@@ -72,13 +72,31 @@ def only_inside_tmp(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(places, "_home_names", names)
 
 
+LOOPBACK = {"127.0.0.1", "::1", "localhost"}
+
+
 @pytest.fixture(autouse=True)
 def no_network(monkeypatch: pytest.MonkeyPatch) -> None:
-    def refuse(*_a: object, **_k: object) -> None:
-        raise AssertionError("mecha scan must not touch the network")
+    """Any connection off this machine fails. Loopback stays allowed: on Windows, asyncio
+    builds its event loop's internal socket pair by connecting to 127.0.0.1."""
+    real_connect = socket.socket.connect
+    real_create = socket.create_connection
 
-    monkeypatch.setattr(socket.socket, "connect", refuse)
-    monkeypatch.setattr(socket, "create_connection", refuse)
+    def host(address: object) -> object:
+        return address[0] if isinstance(address, tuple) else address
+
+    def connect(self: socket.socket, address: object) -> None:
+        if host(address) not in LOOPBACK:
+            raise AssertionError(f"mecha scan must not touch the network: {address}")
+        real_connect(self, address)  # type: ignore[arg-type]
+
+    def create(address: object, *args: object, **kwargs: object) -> socket.socket:
+        if host(address) not in LOOPBACK:
+            raise AssertionError(f"mecha scan must not touch the network: {address}")
+        return real_create(address, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(socket.socket, "connect", connect)
+    monkeypatch.setattr(socket, "create_connection", create)
 
 
 def env(tree: Path, platform: str = "linux", **environ: str) -> Env:
@@ -428,7 +446,7 @@ def test_a_session_file_in_a_dotfiles_repo_is_amber(svc: MechaService, tree: Pat
 def test_scanning_never_creates_a_store(cli_env: Path) -> None:
     (cli_env / "a.env").write_text(f"ANTHROPIC_API_KEY={ant()}\n")
     out = CliRunner().invoke(app, ["scan", str(cli_env), "--json"])
-    assert json.loads(out.output)["warnings"] == ["no_store"]
+    assert "no_store" in json.loads(out.output)["warnings"]  # (+ a Windows permissions note)
     assert not db_path().exists()
 
 
