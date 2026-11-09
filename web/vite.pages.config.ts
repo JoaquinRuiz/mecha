@@ -80,7 +80,8 @@ function pagesHtml(): Plugin {
     `<meta property="og:image" content="${SITE}social.png" />`,
     `<meta property="og:image:width" content="1200" />`,
     `<meta property="og:image:height" content="630" />`,
-    `<meta property="og:image:alt" content="Mecha: how much fuse is left on your API keys?" />`,
+    // The image's text is in Spanish, so its description is too.
+    `<meta property="og:image:alt" content="Mecha: ¿cuánta mecha le queda a tus API keys?" />`,
     `<meta name="twitter:card" content="summary_large_image" />`,
   ].join('\n    ')
   return {
