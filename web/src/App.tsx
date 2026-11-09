@@ -2,7 +2,10 @@ import { useEffect, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Dashboard } from '@/Dashboard'
 import { useI18n } from '@/i18n'
-import { ApiError, apiFetch, initSessionToken } from '@/lib/session'
+import { makeApi } from '@/lib/api'
+import { StaticBanner } from '@/lib/edition'
+import { ApiError } from '@/lib/errors'
+import { initSessionToken } from '@/lib/session'
 
 type Health = { status: 'ok'; version: string; demo: boolean }
 
@@ -24,7 +27,8 @@ export function App({ token = initSessionToken() }: { token?: string | null }) {
       return
     }
     let cancelled = false
-    apiFetch<Health>(token, '/health')
+    makeApi(token)
+      .health()
       .then((health) => !cancelled && setState({ kind: 'ready', health }))
       .catch((e: unknown) => {
         if (cancelled) return
@@ -36,7 +40,14 @@ export function App({ token = initSessionToken() }: { token?: string | null }) {
     }
   }, [token, attempt])
 
-  if (state.kind === 'ready' && token) return <Dashboard token={token} />
+  if (state.kind === 'ready' && token) {
+    return (
+      <>
+        {StaticBanner && <StaticBanner />}
+        <Dashboard token={token} />
+      </>
+    )
+  }
 
   return (
     <main className="mx-auto flex min-h-svh max-w-xl flex-col justify-center gap-4 p-6">
