@@ -28,6 +28,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { useI18n } from '@/i18n'
 import type { MessageKey } from '@/i18n/en'
 import type { Api } from '@/lib/api'
+import { STATIC_DEMO } from '@/lib/edition'
 import type { CredentialStatus, ProbeInfo, Signal, Source } from '@/lib/types'
 import { cn } from '@/lib/utils'
 import { Fuse, fuseModel } from './Fuse'
@@ -392,11 +393,16 @@ export function DetailSheet({
                   }}
                 >
                   <h3 className="font-medium text-sm">{t('budget')}</h3>
+                  {STATIC_DEMO && (
+                    <p className="text-muted-foreground text-xs" data-testid="static-disabled">
+                      {t('staticNotAvailable')}
+                    </p>
+                  )}
                   <p className="text-muted-foreground text-xs">{t('budgetHint')}</p>
                   <p className="text-amber-700 text-xs dark:text-amber-300">
                     {t('budgetAutoRecharge')}
                   </p>
-                  <div className="grid grid-cols-2 gap-2">
+                  <fieldset disabled={STATIC_DEMO} className="grid grid-cols-2 gap-2">
                     <div className="space-y-1">
                       <Label htmlFor={`${formId}-budget`}>{t('budgetAmount')}</Label>
                       <Input
@@ -415,8 +421,8 @@ export function DetailSheet({
                         onChange={(e) => setBudgetDate(e.target.value)}
                       />
                     </div>
-                  </div>
-                  <div className="flex gap-2">
+                  </fieldset>
+                  <fieldset disabled={STATIC_DEMO} className="flex gap-2">
                     <Button
                       type="submit"
                       size="sm"
@@ -434,7 +440,7 @@ export function DetailSheet({
                         {t('clear')}
                       </Button>
                     )}
-                  </div>
+                  </fieldset>
                 </form>
               )}
 
@@ -486,9 +492,16 @@ export function DetailSheet({
                   <Input
                     id={`${formId}-expiry`}
                     type="date"
+                    disabled={STATIC_DEMO}
+                    aria-describedby={STATIC_DEMO ? `${formId}-expiry-static` : undefined}
                     value={expiry}
                     onChange={(e) => setExpiry(e.target.value)}
                   />
+                  {STATIC_DEMO && (
+                    <p id={`${formId}-expiry-static`} className="text-muted-foreground text-xs">
+                      {t('staticNotAvailable')}
+                    </p>
+                  )}
                 </div>
                 <div className="space-y-1">
                   <Label htmlFor={`${formId}-notes`}>{t('notes')}</Label>

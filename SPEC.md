@@ -528,6 +528,20 @@ Decisiones de la fase:
 - [x] `uvx mecha-keys` funciona en una máquina limpia con Linux, macOS y Windows.
 - [x] `mecha export` y `mecha restore` recuperan todas las credenciales.
 
+### Demo web (GitHub Pages)
+
+Mecha en el navegador, sin instalar nada: https://joaquinruiz.github.io/mecha/
+
+- **Mismo frontend, otra build.** `vite.pages.config.ts` sustituye, por su ruta ya resuelta, los módulos que hablan con el servidor local (`lib/api`, `lib/events`, `lib/session`) y `lib/edition` por versiones en memoria con la misma interfaz (`web/src/demo`). Si cambia la interfaz real, `tsc` rompe la demo.
+- **Datos de `mecha serve --demo`.** `scripts/dump_demo.py` graba las respuestas de las rutas reales de la API sobre `DemoService` (listado, proveedores, historial, comprobar y sondear cada credencial, y las claves de ejemplo ya añadidas) en `web/src/demo/data.json`, de forma determinista. El CI falla si el fichero no coincide. La API en memoria no calcula estados: reproduce lo que calculó Python.
+- **Fechas.** Al cargar se aplica un único desplazamiento (hora del navegador menos `generated_at`) a todos los campos de fecha, `generated_at` incluido. La única excepción es `prices_checked`, que es una fecha real. Un test falla si alguna fecha queda sin desplazar.
+- **Sin campo para pegar claves.** «Añadir» ofrece claves de ejemplo; no hay importación de `.env` ni vinculación de ficheros. Lo que necesitaría el motor de estados (presupuesto de OpenAI, caducidad manual) se ve desactivado, con la nota «no disponible en la demo web».
+- **CSP en `<meta>`.** Pages no permite cabeceras, así que va en una etiqueta: `connect-src 'none'` con los datos dentro del bundle, scripts solo `'self'`, y `'unsafe-inline'` solo en `style-src` (Radix y Motion inyectan estilos, y un nonce fijo no protegería de nada). Sin recursos incrustados como `data:`.
+- **Separación comprobada.** `scripts/check_web_builds.py` falla si la app real contiene código o datos de la demo (para que `mecha serve` nunca muestre datos inventados como si fueran tuyos) o si la demo contiene el cliente de `/api`.
+- **Aviso fijo** arriba, sin botón de cerrar: datos inventados, no envía nada; para usar tus claves, `uvx mecha-keys`.
+- **Título, descripción y Open Graph** con `docs/social.png` (1200×630).
+- **Despliegue.** `.github/workflows/pages.yml` en cada release publicada, con las acciones fijadas por SHA y sin cachés. Antes construye las dos apps, pasa los checks y la e2e de Playwright contra la build estática (ninguna petición fuera de sus ficheros, ningún error de CSP, axe). El environment `github-pages` solo acepta tags `v*`.
+
 ## Instrucciones para Claude Code y riesgos
 
 Implementa fase a fase y no inventes endpoints: lo marcado como «verificar» se confirma en la documentación oficial antes de escribir el código.

@@ -162,6 +162,13 @@ export const en = {
   add: 'Add',
   added: 'Added «{label}»',
   demoAddHint: 'Demo mode: only the redacted form is kept, never the secret.',
+  staticBanner: 'Web demo with made-up data: nothing is sent anywhere.',
+  staticBannerInstall: 'To use your own keys:',
+  copyCommand: 'Copy the command',
+  copied: 'Copied',
+  samplePickHint:
+    'Pick a sample key. The web demo never asks you to paste a real one: install Mecha for that.',
+  staticNotAvailable: 'Not available in the web demo: install Mecha (uvx mecha-keys).',
   failed: 'Something went wrong: {message}',
   checkAllStarted: 'Checking {count}',
   'plural.credential.one': '# credential',

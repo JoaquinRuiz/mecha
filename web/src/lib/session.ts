@@ -1,3 +1,5 @@
+import { ApiError } from './errors'
+
 /**
  * Session token handling.
  *
@@ -54,16 +56,7 @@ export function clearSessionToken(): void {
   }
 }
 
-export class ApiError extends Error {
-  readonly status: number
-  readonly code: string
-
-  constructor(status: number, code: string, message: string) {
-    super(message)
-    this.status = status
-    this.code = code
-  }
-}
+export { ApiError }
 
 /** fetch() against the local API with the session token attached. */
 export async function apiFetch<T>(

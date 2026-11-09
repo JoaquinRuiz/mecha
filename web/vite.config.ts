@@ -13,6 +13,8 @@ export const NONCE_PLACEHOLDER = '__MECHA_CSP_NONCE__'
 export default defineConfig({
   plugins: [react(), tailwindcss()],
   html: { cspNonce: NONCE_PLACEHOLDER },
+  // Only the web demo reads it (src/demo); tests of the demo modules need a value.
+  define: { __MECHA_VERSION__: JSON.stringify('test') },
   resolve: {
     alias: { '@': fileURLToPath(new URL('./src', import.meta.url)) },
   },

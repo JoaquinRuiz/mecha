@@ -14,7 +14,8 @@ import { Label } from '@/components/ui/label'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { useI18n } from '@/i18n'
 import type { Api } from '@/lib/api'
-import { ApiError } from '@/lib/session'
+import { SamplePicker } from '@/lib/edition'
+import { ApiError } from '@/lib/errors'
 import type { Detection, Kind, ProviderInfo } from '@/lib/types'
 import { EnvImportPanel, LinkPanel } from './ImportPanels'
 import { useToast } from './Toaster'
@@ -83,6 +84,18 @@ export function AddDialog({
     onError: (e: Error) => toast(t('failed', { message: e.message }), 'error'),
   })
 
+  // Web demo: pick a sample key (there is no field to paste one).
+  const pick = useMutation({
+    mutationFn: ({ value, label }: { value: string; label: string }) =>
+      api.add({ secret: value, label }),
+    onSuccess: (item) => {
+      toast(t('added', { label: item.credential.label }))
+      void qc.invalidateQueries({ queryKey: ['credentials'] })
+      onOpenChange(false)
+    },
+    onError: (e: Error) => toast(t('failed', { message: e.message }), 'error'),
+  })
+
   // Debounced live detection.
   const { mutate: runDetect, reset: resetDetect } = detect
   useEffect(() => {
@@ -114,6 +127,23 @@ export function AddDialog({
   const needsProvider = det && (det.format === 'unknown' || det.ambiguous || det.provider === null)
   const blocked = det && det.format !== 'unknown' && !det.storable
   const err = add.error instanceof ApiError ? add.error : null
+
+  if (SamplePicker) {
+    return (
+      <Dialog open={open} onOpenChange={onOpenChange}>
+        <DialogContent data-testid="add-dialog">
+          <DialogHeader>
+            <DialogTitle>{t('addTitle')}</DialogTitle>
+            <DialogDescription>{t('staticBanner')}</DialogDescription>
+          </DialogHeader>
+          <SamplePicker
+            pending={pick.isPending}
+            onPick={(value, sampleLabel) => pick.mutate({ value, label: sampleLabel })}
+          />
+        </DialogContent>
+      </Dialog>
+    )
+  }
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>

@@ -1,0 +1,146 @@
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import AxeBuilder from '@axe-core/playwright'
+import { expect, type Page, test } from '@playwright/test'
+
+// The static web demo (GitHub Pages build), served under /mecha/ by e2e/pages-setup.ts.
+const URL = readFileSync(join(import.meta.dirname, '.pages-url'), 'utf8').trim()
+
+/**
+ * Fail on console errors, page errors, CSP violations and on *any* request outside the
+ * demo's own files: the page must not send anything anywhere.
+ */
+async function guard(page: Page): Promise<{ problems: string[]; requests: string[] }> {
+  const problems: string[] = []
+  const requests: string[] = []
+  await page.addInitScript(() => {
+    document.addEventListener('securitypolicyviolation', (e) => {
+      console.error(`CSP violation: ${e.violatedDirective} ${e.blockedURI}`)
+    })
+  })
+  page.on('console', (m) => {
+    if (m.type() === 'error') problems.push(m.text())
+  })
+  page.on('pageerror', (e) => problems.push(e.message))
+  page.on('request', (r) => {
+    requests.push(r.url())
+    if (!r.url().startsWith(URL))
+      problems.push(`request outside the demo: ${r.method()} ${r.url()}`)
+  })
+  return { problems, requests }
+}
+
+async function open(page: Page) {
+  await page.goto(URL)
+  await expect(page.locator('[data-testid="credential-card"]').first()).toBeVisible()
+}
+
+test('fixed notice, CSP in a meta tag, Open Graph, nothing sent anywhere', async ({ page }) => {
+  const { problems, requests } = await guard(page)
+  await open(page)
+  const banner = page.getByTestId('static-banner')
+  await expect(banner).toBeVisible()
+  await expect(banner).toContainText('uvx mecha-keys')
+  await expect(banner).toContainText(/made-up data/i)
+  await expect(banner.getByRole('button', { name: /close|dismiss/i })).toHaveCount(0)
+
+  const csp = await page
+    .locator('meta[http-equiv="Content-Security-Policy"]')
+    .getAttribute('content')
+  expect(csp).toContain("connect-src 'none'")
+  expect(csp).toContain("script-src 'self'")
+  expect(csp).not.toMatch(/script-src[^;]*unsafe-inline/)
+  // The browser enforces it: a fetch from the page is refused.
+  const blocked = await page.evaluate(() =>
+    fetch('/mecha/index.html').then(
+      () => false,
+      () => true,
+    ),
+  )
+  expect(blocked).toBe(true)
+  problems.splice(0) // the blocked fetch above logs a CSP violation on purpose
+
+  expect(await page.locator('meta[property="og:image"]').getAttribute('content')).toBe(
+    'https://joaquinruiz.github.io/mecha/social.png',
+  )
+  expect(await page.title()).toBe('Mecha · web demo')
+  const social = await page.request.get(`${URL}social.png`)
+  expect(social.status()).toBe(200)
+
+  await page.getByRole('button', { name: /check all/i }).click()
+  await expect(page.getByTestId('last-global')).toContainText(/last check/i)
+  await page.waitForTimeout(3500) // let check-all run through every card
+  expect(requests.every((u) => u.startsWith(URL))).toBe(true)
+  expect(problems).toEqual([])
+})
+
+test('"Add" offers sample keys only: no field to paste a key', async ({ page }) => {
+  const { problems } = await guard(page)
+  await open(page)
+  const before = await page.locator('[data-testid="credential-card"]').count()
+  await page.getByRole('button', { name: 'Add credential' }).click()
+  const dialog = page.getByTestId('add-dialog')
+  await expect(dialog.getByTestId('sample-picker')).toBeVisible()
+  await expect(dialog.getByRole('textbox')).toHaveCount(0)
+  await expect(dialog.locator('textarea, input')).toHaveCount(0)
+  await expect(dialog.getByRole('tab')).toHaveCount(0) // no .env import, no linking
+  await dialog.getByRole('button', { name: /OpenRouter/ }).click()
+  await expect(dialog).toBeHidden()
+  await expect(page.locator('[data-testid="credential-card"]')).toHaveCount(before + 1)
+  await expect(
+    page.getByRole('button', { name: 'Sample OpenRouter key', exact: true }),
+  ).toBeVisible()
+  expect(problems).toEqual([])
+})
+
+test('probe with the hourly limit dialog; budget and manual expiry disabled', async ({ page }) => {
+  const { problems } = await guard(page)
+  await open(page)
+  const card = page
+    .locator('[data-testid="credential-card"]')
+    .filter({ has: page.getByRole('button', { name: /Active probe/ }) })
+    .first()
+  const probe = card.getByRole('button', { name: /Active probe/ })
+  await probe.click()
+  await expect(page.getByText(/Probe done/).first()).toBeVisible()
+  await probe.click()
+  const confirm = page.getByRole('alertdialog')
+  await expect(confirm).toBeVisible()
+  await expect(confirm.getByRole('button', { name: /^Cancel$/ })).toBeFocused()
+  await confirm.getByRole('button', { name: /^Cancel$/ }).click()
+
+  await page.getByRole('button', { name: 'Org admin', exact: true }).click()
+  const budget = page.getByTestId('budget-form')
+  await expect(budget).toBeVisible()
+  await expect(budget.getByTestId('static-disabled')).toContainText(
+    /not available in the web demo/i,
+  )
+  await expect(budget.getByRole('button', { name: /^Save$/ })).toBeDisabled()
+  await expect(page.getByLabel('Manual expiry')).toBeDisabled()
+  expect(problems).toEqual([])
+})
+
+test('delete works in memory and a reload brings the demo back', async ({ page }) => {
+  const { problems } = await guard(page)
+  await open(page)
+  const before = await page.locator('[data-testid="credential-card"]').count()
+  await page.getByRole('button', { name: 'Leaked in a gist', exact: true }).click()
+  await page.getByRole('button', { name: /^Delete$/ }).click()
+  await page
+    .getByRole('alertdialog')
+    .getByRole('button', { name: /^Delete$/ })
+    .click()
+  await expect(page.locator('[data-testid="credential-card"]')).toHaveCount(before - 1)
+  await page.reload()
+  await expect(page.locator('[data-testid="credential-card"]')).toHaveCount(before)
+  expect(problems).toEqual([])
+})
+
+for (const theme of ['dark', 'light'] as const) {
+  test(`no axe violations in the ${theme} theme`, async ({ page }) => {
+    await page.addInitScript((t) => window.localStorage.setItem('mecha.theme', t), theme)
+    await open(page)
+    const results = await new AxeBuilder({ page }).analyze()
+    expect(results.violations.map((v) => `${v.id}: ${v.help}`)).toEqual([])
+  })
+}
