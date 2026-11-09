@@ -170,6 +170,15 @@ class ReasonFact(BaseModel):
     by: str | None = None
 
 
+class ExposureSummary(BaseModel):
+    """How many places a stored key was also found in plaintext (mecha scan). Counts only:
+    the locations themselves are kept encrypted (store.exposures)."""
+
+    risky: int = 0
+    info: int = 0
+    scanned_at: datetime
+
+
 class CredentialFacts(BaseModel):
     expires_at: Fact[datetime | None] | None = None  # value None: the API says it never expires
     status: Fact[Validity] | None = None  # e.g. revoked/blocked according to an admin API
@@ -179,6 +188,7 @@ class CredentialFacts(BaseModel):
     limits: Fact[Limits] | None = None  # from an active probe
     account: dict[str, Fact[str]] = Field(default_factory=dict)
     reasons: list[ReasonFact] = Field(default_factory=list)
+    exposure: ExposureSummary | None = None
     last_probe_at: datetime | None = None
     probe_model: str | None = None
 

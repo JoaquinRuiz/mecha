@@ -50,6 +50,7 @@ R_VALIDITY_UNKNOWN = "validity_unknown"
 R_LOCAL_ONLY = "local_only"
 R_VALID = "valid"
 R_FUNDS_LOW_ESTIMATED = "funds_low_estimated"  # «saldo bajo (estimado)», never red
+R_EXPOSED = "exposed_in_plaintext"  # «también en texto plano en N sitios de riesgo» (scan)
 R_OWNER_NO_ACCESS = "owner_no_project_access"  # «su propietario ya no tiene acceso al proyecto»
 R_LINKED_UNREADABLE = "linked_file_unreadable"  # a linked session file is missing/unreadable
 R_PROBE_MISCONFIGURED = "probe_misconfigured"  # the probe model no longer exists (404)
@@ -262,6 +263,9 @@ def evaluate(
     if not oauth:
         # API-reported warnings are amber at most: red needs real proof.
         notes = [*notes, *(Reason(code=f.code, overall=Overall.amber) for f in facts.reasons)]
+        # Found in plaintext in a risky place (mecha scan): amber, never red.
+        if facts.exposure is not None and facts.exposure.risky > 0:
+            notes = [*notes, Reason(code=R_EXPOSED, overall=Overall.amber)]
         info = facts.funds_info
         # The organization estimate may warn on the admin key that reads the Costs API (and
         # only there): amber «low funds (estimated)», never red, even at or below zero.
