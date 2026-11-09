@@ -56,7 +56,7 @@ The store key lives in the system keyring. Without a keyring (headless Linux, cr
 
 ### Backups
 
-`mecha export FILE` writes every credential (secrets, labels, tags, notes, budgets and probe settings; not the check history) encrypted with AES-256-GCM under a key derived from a passphrase you choose (Argon2id). The file is created with `0600` permissions and its header names the format, the key derivation function and its parameters. The store's own key is never written, so a backup opens on any machine with its passphrase. There is no plaintext export.
+`mecha export FILE` writes every credential (secrets, labels, tags, notes, budgets and probe settings; not the check history) encrypted with AES-256-GCM under a key derived from a passphrase you choose (at least 12 characters; Argon2id). The file is created with `0600` permissions and its header names the format, the key derivation function and its parameters, which are checked against upper bounds before any key is derived, so a tampered file cannot demand huge amounts of memory. The store's own key is never written, so a backup opens on any machine with its passphrase. There is no plaintext export.
 
 `mecha restore FILE` merges a backup into the current store: duplicates are detected with the destination store's key and skipped, nothing is overwritten, and it says what it did with each entry. Without a terminal, both read the passphrase from `MECHA_BACKUP_PASSPHRASE_FILE` (a `0600` file).
 

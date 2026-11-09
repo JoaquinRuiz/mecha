@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 import stat
@@ -126,6 +127,54 @@ def test_wrong_passphrase_and_tampering_fail(tmp_path: Path) -> None:
         decrypt_backup(b"hello", PASS)
     with pytest.raises(BackupError, match="needs a passphrase"):
         encrypt_backup({}, "")
+    with pytest.raises(BackupError, match="at least 12 characters"):
+        encrypt_backup({}, "short-pass1")  # 11 characters
+    assert encrypt_backup({}, "twelve-chars")  # 12 is enough
+
+
+def test_kdf_parameters_are_bounded_before_deriving(monkeypatch: pytest.MonkeyPatch) -> None:
+    data = encrypt_backup({"kind": "mecha-backup", "items": []}, PASS)
+
+    def must_not_derive(*_: object) -> bytes:
+        raise AssertionError("the KDF ran on rejected parameters")
+
+    monkeypatch.setattr("mecha.core.backup._derive", must_not_derive)
+    argon = {
+        "kdf": "argon2id",
+        "salt": base64.b64encode(b"s" * 16).decode(),
+        "iterations": 3,
+        "lanes": 4,
+        "memory_cost": 65536,
+    }
+    scrypt = {"kdf": "scrypt", "salt": argon["salt"], "n": 2**15, "r": 8, "p": 3}
+    bad = [
+        {**argon, "memory_cost": 2**40},  # terabytes of memory
+        {**argon, "memory_cost": 1024**2 + 1},  # just over 1 GiB
+        {**argon, "iterations": 10**9},
+        {**argon, "lanes": 0},
+        {**argon, "iterations": True},  # bool is not an int here
+        {**argon, "iterations": "3"},
+        {**argon, "extra": 1},
+        {**scrypt, "n": 2**21},
+        {**scrypt, "n": 3 * 2**10},  # not a power of two
+        {**scrypt, "r": 33},
+        {**scrypt, "n": 2**20, "r": 16},  # 2 GiB
+        {**scrypt, "p": 10**6},
+        {**argon, "salt": "c2hvcnQ="},  # 5-byte salt
+        {**argon, "salt": "%%%"},
+        {"kdf": "pbkdf2", "salt": argon["salt"]},
+    ]
+    for params in bad:
+        header, _, rest = read_header(data)
+        header["kdf"] = params
+        forged = MAGIC + json.dumps(header, sort_keys=True).encode() + b"\n" + rest
+        with pytest.raises(BackupError):
+            decrypt_backup(forged, PASS)
+    # The largest accepted values still pass validation (and would derive normally).
+    from mecha.core.backup import validate_kdf
+
+    validate_kdf({**argon, "memory_cost": 1024**2, "iterations": 10, "lanes": 16})
+    validate_kdf({**scrypt, "n": 2**20, "r": 8, "p": 16})
 
 
 def test_header_names_the_kdf_and_never_carries_the_store_key(tmp_path: Path) -> None:
@@ -163,6 +212,15 @@ def test_cli_export_and_restore(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
     monkeypatch.setenv("MECHA_BACKUP_PASSPHRASE_FILE", str(pfile))
     out = tmp_path / "backup.mecha"
     runner = CliRunner()
+    short = tmp_path / "short.txt"
+    short.write_text("too-short\n")
+    short.chmod(0o600)
+    monkeypatch.setenv("MECHA_BACKUP_PASSPHRASE_FILE", str(short))
+    r = runner.invoke(app, ["export", str(out)])
+    assert r.exit_code != 0
+    assert "at least 12 characters" in r.output
+    assert not out.exists()
+    monkeypatch.setenv("MECHA_BACKUP_PASSPHRASE_FILE", str(pfile))
     r = runner.invoke(app, ["export", str(out)])
     assert r.exit_code == 0, r.output
     assert "Exported 2 credential(s)" in r.output
