@@ -4,7 +4,7 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.2.0] - 2026-11-09
 
 ### Added
 
@@ -12,6 +12,12 @@ All notable changes to this project are documented here. The format follows
   histories, notebooks), offline and on demand; severity by location, confidence by
   variable name, import of findings and an optional `--check` with each key's provider.
   Locations of keys Mecha keeps are stored encrypted and turn their card amber.
+
+### Fixed
+
+- The dashboard no longer requests the listing twice when the event stream opens late,
+  and no longer misses a change made between loading the listing and opening the stream:
+  events carry a sequence number and the stream starts with the current position.
 
 ## [0.1.2] - 2026-11-09
 
@@ -49,6 +55,7 @@ First public release (alpha).
   a redacted preview.
 - `mecha export` / `mecha restore`: encrypted backups with their own passphrase.
 
+[0.2.0]: https://github.com/JoaquinRuiz/mecha/releases/tag/v0.2.0
 [0.1.2]: https://github.com/JoaquinRuiz/mecha/releases/tag/v0.1.2
 [0.1.1]: https://github.com/JoaquinRuiz/mecha/releases/tag/v0.1.1
 [0.1.0]: https://github.com/JoaquinRuiz/mecha/releases/tag/v0.1.0
