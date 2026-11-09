@@ -18,8 +18,6 @@ All notable changes to this project are documented here. The format follows
 - The dashboard no longer requests the listing twice when the event stream opens late,
   and no longer misses a change made between loading the listing and opening the stream:
   events carry a sequence number and the stream starts with the current position.
-- A failed store open (e.g. a file that is not a database) no longer leaks the SQLite
-  handle.
 
 ## [0.1.2] - 2026-11-09
 
