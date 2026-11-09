@@ -119,7 +119,7 @@ scripts/        release checks, README table generator, demo GIF recorder
 docs/           provider notes and architecture decision records (docs/adr/)
 ```
 
-Never use real API keys in tests, fixtures or commits.
+Never use real API keys in tests, fixtures or commits. See [CONTRIBUTING.md](CONTRIBUTING.md) to get involved.
 
 ## License
 
