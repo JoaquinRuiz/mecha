@@ -217,6 +217,8 @@ export const en = {
   linked: 'Linked «{label}»',
   'reason.funds_low_estimated': 'Low funds (estimated)',
   'reason.owner_no_project_access': 'Its owner no longer has access to the project',
+  'reason.exposed_in_plaintext':
+    'Also in plaintext in a risky place (shell history, repository, synced folder…)',
   'reason.probe_misconfigured': 'Probe misconfigured (model not found)',
   'reason.probe_uncertain': 'Probe timed out after sending (may have been billed)',
   'reason.linked_file_unreadable': 'Linked session file missing or unreadable',

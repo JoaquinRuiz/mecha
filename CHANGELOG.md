@@ -4,6 +4,15 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- `mecha scan`: find AI keys in plaintext on this machine (files, AI tool configs, shell
+  histories, notebooks), offline and on demand; severity by location, confidence by
+  variable name, import of findings and an optional `--check` with each key's provider.
+  Locations of keys Mecha keeps are stored encrypted and turn their card amber.
+
 ## [0.1.2] - 2026-11-09
 
 ### Added

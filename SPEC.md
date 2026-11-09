@@ -570,7 +570,20 @@ Mecha protege los secretos que guarda, pero no los que están sueltos en tu máq
 - **Salida redactada.** Fichero, línea (o celda), clave redactada, proveedor, confianza, gravedad y motivo. Nunca el contenido de la línea, ni en la terminal, ni en `--json`, ni en los logs.
 - **Cruce con las claves guardadas.** Cada clave encontrada se compara por su huella HMAC con las guardadas: «ya está en Mecha (ID)». Si el almacén está bloqueado, el escaneo funciona igual sin cruzar y lo avisa.
 - **Las ubicaciones también son sensibles**, porque son un mapa de dónde están tus claves en claro. Nunca se guardan en claro: o van cifradas con la clave del almacén, o se quedan solo en memoria (ver decisiones).
-- **Importar.** El listado no contiene secretos. Importar vuelve a leer la línea elegida del fichero, como la importación de `.env`, y comprueba que la clave sigue ahí.
+- **Importar.** El listado no contiene secretos. Importar vuelve a leer la línea elegida del fichero, como la importación de `.env`, y comprueba que la clave sigue ahí (misma huella). Los IDs salen de la ruta, la línea y la posición, nunca del secreto. Solo se importan claves de confianza alta; los ficheros de sesión, nunca (`mecha link`).
+
+Decisiones tras revisar el plan:
+
+- **Lectura.** Todos los ficheros de texto hasta 1 MiB (notebooks hasta 20 MiB), con un prefiltro por trozos que se solapan para no partir una clave. Se excluyen también los almacenes de modelos locales (`~/.ollama`, `~/.cache/huggingface`, `~/.lmstudio`).
+- **Ubicaciones guardadas** solo de claves que ya están en Mecha, cifradas con la clave del almacén (migración `003`, datos asociados `exposure:<id>`) y borradas con la credencial. Cada escaneo sustituye las de los ficheros que recorre. En los datos de la credencial solo quedan los recuentos, para el motivo ámbar «también en texto plano». Las de claves que Mecha no gestiona solo salen en la salida. Si no hay almacén todavía, el escaneo no crea uno.
+- **Legible por otros:** solo el permiso de lectura para otros (no el del grupo), con permiso de paso en todas las carpetas superiores, y ámbar solo si hay otras cuentas de persona en la máquina (UID ≥ 1000 con shell real en Linux, ≥ 501 en macOS). En Windows no se evalúa y se avisa.
+- **Git:** `-c core.fsmonitor=false`, sin bloqueos opcionales (no se refresca ni escribe el índice), sin preguntas y una sola llamada por repositorio: `ls-files --cached --others --exclude-standard` da a la vez los versionados y los no ignorados. Sin `git`, información con la nota «no se pudo comprobar git».
+- **Confianza baja** en un sitio de riesgo: ámbar en su bloque, pero no cambia el código de salida.
+- **`--check`:** solo endpoints gratuitos, nunca sondas de pago; confirmación que dice cuántas claves van a qué proveedor (`--yes` para scripts); nunca las de confianza baja. Una clave inválida o revocada deja de ser ámbar.
+- **Ficheros de sesión** (Codex, Claude Code, Gemini CLI): información, salvo en un sitio de riesgo (por ejemplo, versionados en un repositorio de dotfiles).
+- **Carpetas sincronizadas:** por defecto en Linux y Windows; en macOS, iCloud Drive y `~/Library/CloudStorage` van con `--include-protected`. Los ficheros solo en la nube se detectan por sus atributos (`SF_DATALESS`; atributos de recall en Windows), sin abrirlos.
+- **Windsurf:** la ruta de Devin Desktop y la antigua `~/.codeium/windsurf`, marcada como antigua.
+- **Historiales:** también las sesiones de Terminal en macOS (`~/.zsh_sessions`, `~/.bash_sessions`) y `$HISTFILE`.
 - **Códigos de salida como `check`.** `0` si no hay nada de riesgo, `1` si hay algo en ámbar y `3` si hay un error o un uso incorrecto.
 - **Límites.**
   - Exclusiones por defecto: dependencias (`node_modules`, `vendor`…), cachés, entornos virtuales, `.git`, la papelera y `~/Library` en macOS (salvo las configuraciones conocidas).
@@ -584,15 +597,15 @@ Mecha protege los secretos que guarda, pero no los que están sueltos en tu máq
 
 **Tests.** Nunca recorren el home real, tampoco en CI. Usan árboles temporales con claves inventadas, y un fixture hace fallar cualquier test que lea fuera de su árbol.
 
-- [ ] `mecha scan [RUTAS]` lista cada clave encontrada con fichero, línea (o celda), clave redactada, proveedor, confianza y gravedad, sin guardar nada. El canario no aparece en stdout, `--json`, los logs ni la base de datos.
-- [ ] Ninguna conexión de red durante el escaneo (un test falla ante cualquier intento). `--check` solo llama al endpoint gratuito del proveedor de cada clave.
-- [ ] Solo lo que está en ubicaciones de riesgo sale en ámbar; el resto, como información. El código de salida es `0` o `1` según haya o no algo en ámbar.
-- [ ] Las claves de confianza baja (`AIza` o `sk-` sin un nombre que confirme el proveedor) salen aparte.
-- [ ] Las configuraciones de las cinco herramientas de IA y los historiales de zsh, bash, fish y PowerShell se escanean por defecto, con las rutas de cada plataforma documentadas.
-- [ ] Una clave ya guardada se señala como tal. Con el almacén bloqueado, el escaneo funciona sin cruzar y lo avisa.
-- [ ] Las ubicaciones nunca se guardan en claro.
-- [ ] Importar vuelve a leer el fichero y falla si la clave ya no está en esa línea.
-- [ ] Se respetan las exclusiones, el tamaño máximo, los binarios, los enlaces fuera de las raíces y los ficheros solo en la nube, y se cuenta lo saltado. En macOS, Escritorio, Documentos y Descargas solo si se piden.
+- [x] `mecha scan [RUTAS]` lista cada clave encontrada con fichero, línea (o celda), clave redactada, proveedor, confianza y gravedad, sin guardar nada. El canario no aparece en stdout, `--json`, los logs ni la base de datos.
+- [x] Ninguna conexión de red durante el escaneo (un test falla ante cualquier intento). `--check` solo llama al endpoint gratuito del proveedor de cada clave.
+- [x] Solo lo que está en ubicaciones de riesgo sale en ámbar; el resto, como información. El código de salida es `0` o `1` según haya o no algo en ámbar.
+- [x] Las claves de confianza baja (`AIza` o `sk-` sin un nombre que confirme el proveedor) salen aparte.
+- [x] Las configuraciones de las cinco herramientas de IA y los historiales de zsh, bash, fish y PowerShell se escanean por defecto, con las rutas de cada plataforma documentadas.
+- [x] Una clave ya guardada se señala como tal. Con el almacén bloqueado, el escaneo funciona sin cruzar y lo avisa.
+- [x] Las ubicaciones nunca se guardan en claro.
+- [x] Importar vuelve a leer el fichero y falla si la clave ya no está en esa línea.
+- [x] Se respetan las exclusiones, el tamaño máximo, los binarios, los enlaces fuera de las raíces y los ficheros solo en la nube, y se cuenta lo saltado. En macOS, Escritorio, Documentos y Descargas solo si se piden.
 
 ## Instrucciones para Claude Code y riesgos
 

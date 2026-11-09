@@ -24,6 +24,7 @@ REQUIRED = (
     "mecha/data/capabilities.toml",
     "mecha/store/migrations/001_initial.sql",
     "mecha/store/migrations/002_credential_facts.sql",
+    "mecha/store/migrations/003_exposures.sql",
 )
 ASSETS = "mecha/static/assets/"
 

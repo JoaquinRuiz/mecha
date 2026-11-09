@@ -6,6 +6,8 @@ Secrets are read only from a hidden prompt or stdin, never from command-line arg
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import functools
 import json
 import logging
@@ -70,7 +72,7 @@ out = Console(highlight=False, soft_wrap=True)
 # ls and check follow the Nagios convention (0 OK, 1 WARNING, 2 CRITICAL, 3 UNKNOWN).
 # Click exits usage errors with 2, which a script would read as "something is red", so for
 # those commands usage errors exit with 3 instead.
-NAGIOS_COMMANDS = frozenset({"ls", "check"})
+NAGIOS_COMMANDS = frozenset({"ls", "check", "scan"})
 
 
 class NagiosCommand(TyperCommand):
@@ -241,6 +243,7 @@ REASON_TEXT = {
     "gemini_iam_denied": "the key's service account lacks permission",
     "funds_low_estimated": "low funds (estimated)",
     "owner_no_project_access": "its owner no longer has access to the project",
+    "exposed_in_plaintext": "also in plaintext in a risky place (mecha scan)",
     "probe_misconfigured": "probe misconfigured (model not found)",
     "probe_uncertain": "probe timed out after sending (may have been billed)",
     "linked_file_unreadable": "linked session file missing or unreadable",
@@ -737,6 +740,226 @@ def restore_cmd(
         console.print(f"[{colour}]{action}[/{colour}]  {cid}  {label}")
     restored = sum(1 for _, a, _ in results if a == "restored")
     console.print(f"{restored} restored, {len(results) - restored} skipped.")
+
+
+RISK_TEXT = {
+    "shell_history": "shell history",
+    "notebook": "notebook",
+    "git_tracked": "tracked by git",
+    "git_not_ignored": "in a git repository, not ignored",
+    "synced_folder": "synced folder",
+    "readable_by_others": "readable by other users",
+}
+SCAN_WARNINGS = {
+    "store_locked": "the store is locked: keys were not compared with the ones Mecha keeps",
+    "no_store": "Mecha keeps no keys yet: nothing to compare with",
+    "git_not_available": "git is not installed: files in repositories were not checked",
+    "readable_by_others_not_checked": "file permissions for other users are not checked here",
+}
+
+
+def _finding_json(f: Any) -> dict[str, Any]:
+    from mecha.core.service import _not_importable
+
+    return {
+        "id": f.location.id,
+        "path": str(f.location.path),
+        "line": f.location.line,
+        "cell_line": f.location.cell_line,
+        "column": f.location.column,
+        "provider": f.provider,
+        "kind": f.kind,
+        "redacted": f.redacted,
+        "name": f.name,
+        "confidence": f.confidence.value,
+        "severity": "amber" if f.amber else "info",
+        "risks": [r.value for r in f.risks],
+        "notes": list(f.notes),
+        "stored_id": f.stored_id,
+        "session_file": f.session_file,
+        "importable": _not_importable(f) is None,
+        "check": f.check,
+    }
+
+
+def _where(f: Any, roots: list[Path]) -> str:
+    """Short path: relative to the scanned root it is in, else with ~ for the home folder."""
+    loc = f.location
+    path = loc.path
+    for root in roots:
+        if root.is_dir() and root in path.parents:
+            path = path.relative_to(root)
+            break
+    else:
+        home = Path.home()
+        if home in path.parents:
+            path = Path("~") / path.relative_to(home)
+    if loc.cell_line is not None:
+        return f"{path} (cell {loc.line}, line {loc.cell_line})"
+    return f"{path}:{loc.line}"
+
+
+def _scan_table(findings: list[Any], title: str, roots: list[Path]) -> Table:
+    table = Table(title=title, title_justify="left", show_edge=False, box=None, pad_edge=False)
+    for col in ("ID", "Severity", "Where", "Key", "Provider", "Note"):
+        table.add_column(col, overflow="fold")
+    for f in findings:
+        severity = "[yellow]amber[/yellow]" if f.amber else "info"
+        notes = [RISK_TEXT[r.value] for r in f.risks]
+        if f.stored_id:
+            notes.append(f"already in Mecha ({f.stored_id[:10]})")
+        if f.session_file:
+            notes.append(f"{f.session_file} session file: use `mecha link`")
+        if f.check:
+            notes.append(f"check: {f.check}")
+        if "git_unknown" in f.notes:
+            notes.append("git status unknown")
+        provider = f.provider or "?"
+        if f.name:
+            provider += f" ({f.name})"
+        table.add_row(
+            f.location.id,
+            severity,
+            escape(_where(f, roots)),
+            escape(f.redacted),
+            escape(provider),
+            escape("; ".join(notes)),
+        )
+    return table
+
+
+@app.command("scan", cls=NagiosCommand)
+@handle_errors
+def scan_cmd(
+    paths: Annotated[
+        list[Path] | None,
+        typer.Argument(metavar="[PATH]...", help="Folders or files (default: your home folder)."),
+    ] = None,
+    as_json: Annotated[bool, typer.Option("--json", help="Machine-readable output.")] = False,
+    include_protected: Annotated[
+        bool,
+        typer.Option(
+            "--include-protected",
+            help="macOS: also Desktop, Documents, Downloads, iCloud Drive and CloudStorage "
+            "(the system may ask for permission).",
+        ),
+    ] = False,
+    max_size: Annotated[
+        int, typer.Option("--max-size", help="Skip files larger than this (bytes).", min=1)
+    ] = 1024 * 1024,
+    check: Annotated[
+        bool,
+        typer.Option(
+            "--check",
+            help="Validate found keys that Mecha does not keep against their own provider's "
+            "free endpoint (sends them over the network; asks first).",
+        ),
+    ] = False,
+    import_ids: Annotated[
+        str | None,
+        typer.Option("--import", help="Import these finding IDs (comma separated)."),
+    ] = None,
+    yes: Annotated[bool, typer.Option("--yes", "-y", help="Do not ask (scripts).")] = False,
+) -> None:
+    """Find AI API keys in plaintext on this machine (offline, on demand).
+
+    Lists every key found with its file and line, redacted; never the line itself. Amber
+    only where a key is a risk: shell history, notebooks, files tracked or not ignored in
+    git, synced folders, files other people on this machine can read. Exit code: 0 nothing
+    risky, 1 something amber (high confidence), 3 any error.
+
+    Security tools on company laptops may flag a program that reads shell histories and
+    config files looking for keys: that is what this command does, only when you run it.
+    """
+    from mecha.scan.walk import Options
+
+    options = Options(roots=list(paths or []), include_protected=include_protected,
+                      max_size=max_size)  # fmt: skip
+    service = _service()
+    try:
+        with console.status("Scanning…", spinner="dots") if not as_json and _interactive() \
+                else contextlib.nullcontext() as status:  # fmt: skip
+
+            def progress(n: int, path: Path) -> None:
+                if status is not None and n % 200 == 0:
+                    status.update(f"Scanning… {n} files")
+
+            # No store yet: scan without creating one (nothing to compare with).
+            report = service.scan(options, progress=progress, use_store=db_path().exists())
+        if check:
+            candidates = service.check_candidates(report)
+            if candidates:
+                by_provider: dict[str, int] = {}
+                for f in candidates:
+                    by_provider[f.provider or "?"] = by_provider.get(f.provider or "?", 0) + 1
+                summary = ", ".join(f"{n} to {p}" for p, n in sorted(by_provider.items()))
+                if not yes:
+                    if not _interactive():
+                        console.print("[red]error:[/red] --check sends keys to their providers: "
+                                      "use --yes to confirm without a terminal.")  # fmt: skip
+                        raise typer.Exit(EXIT_FAILURE)
+                    typer.confirm(
+                        f"Validate {len(candidates)} key(s) not in Mecha with their own "
+                        f"provider's free endpoint ({summary})?",
+                        abort=True,
+                        err=True,
+                    )
+                report = asyncio.run(service.check_found(report))
+        imported: list[dict[str, object]] = []
+        if import_ids:
+            wanted = [i.strip() for i in import_ids.split(",") if i.strip()]
+            if not yes:
+                if not _interactive():
+                    console.print("[red]error:[/red] refusing to import without --yes (no TTY).")
+                    raise typer.Exit(EXIT_FAILURE)
+                typer.confirm(f"Import {len(wanted)} key(s)?", abort=True, err=True)
+            imported = service.import_found(report, wanted)
+    finally:
+        service.close()
+
+    code = 1 if report.amber else 0
+    if as_json:
+        print(
+            json.dumps(
+                {
+                    "roots": [str(r) for r in report.roots],
+                    "store_checked": report.store_checked,
+                    "warnings": report.warnings,
+                    "files_scanned": report.files_scanned,
+                    "skipped": vars(report.skipped),
+                    "findings": [_finding_json(f) for f in report.findings],
+                    "imported": imported,
+                },
+                indent=2,
+            )
+        )
+        raise typer.Exit(code)
+
+    high = [f for f in report.findings if f.confidence.value == "high"]
+    low = [f for f in report.findings if f.confidence.value == "low"]
+    for warning in report.warnings:
+        console.print(f"[yellow]note:[/yellow] {SCAN_WARNINGS.get(warning, warning)}")
+    if high:
+        console.print(_scan_table(high, "Keys found", report.roots))
+    if low:
+        console.print(_scan_table(low, "Low confidence (AIza / sk- without a name that "
+                                       "confirms the provider: may not be AI keys)",
+                                   report.roots))  # fmt: skip
+    if not report.findings:
+        console.print("No keys found.")
+    skipped = {k: v for k, v in vars(report.skipped).items() if v}
+    detail = ", ".join(f"{v} {k.replace('_', ' ')}" for k, v in skipped.items())
+    console.print(
+        f"{report.files_scanned} files read"
+        + (f"; skipped: {detail}" if detail else "")
+        + ". Nothing was sent anywhere." * (not check)
+    )
+    for r in imported:
+        if r["ok"]:
+            console.print(f"[green]imported[/green] {r['id']} -> {r['credential_id']}")
+        else:
+            console.print(f"[red]not imported[/red] {r['id']}: {r['code']}")
+    raise typer.Exit(code)
 
 
 @app.command("link")
