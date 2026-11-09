@@ -371,7 +371,7 @@ Mecha guarda secretos de alto valor, así que el diseño asume que cualquier web
 - **Trazas.** Typer va con `pretty_exceptions_show_locals=False` y sin trazas de Rich: mostrarían las variables locales, secreto incluido. Los errores inesperados de la CLI se imprimen redactados y salen con 3.
 - **Salidas controladas.** Cada plugin declara, por tipo de clave, una lista cerrada de **método + host + ruta**, y el cliente HTTP rechaza cualquier otra petición, otro puerto, `http://` y las redirecciones. Las admin keys y las claves de gestión, que podrían crear o borrar claves, solo tienen las lecturas `GET` verificadas; una clave de gestión de xAI solo llega a `management-api.x.ai` y una clave normal nunca llega allí. Solo se reintentan las lecturas: un `POST` (sonda activa) se envía una vez, y si da timeout tras enviarse queda como «resultado incierto», porque puede haberse cobrado. Respeta `HTTPS_PROXY`/`NO_PROXY` y `SSL_CERT_FILE`/`SSL_CERT_DIR` (proxy corporativo, CA propia): el guard valida el host de destino con o sin proxy, y httpx no lee `.netrc` sin `NetRCAuth` explícito.
 - **Ficheros vinculados.** Solo lectura; los tokens se leen en cada comprobación y nunca se copian.
-- **Copias.** `mecha export` produce un fichero cifrado con frase de paso; no hay export en claro.
+- **Copias.** `mecha export` produce un fichero cifrado con frase de paso; no hay export en claro. AES-256-GCM con una clave derivada de la frase (al menos 12 caracteres; Argon2id, o scrypt donde no lo haya); la cabecera indica formato, KDF, parámetros y sal, y va como datos asociados, así que cualquier cambio impide abrirlo. Como la cabecera solo se autentica al descifrar, después del KDF, sus parámetros se validan antes contra topes (Argon2id hasta 1 GiB, 10 iteraciones y 16 carriles; scrypt con `n` potencia de dos hasta 2^20, `r` ≤ 32, `p` ≤ 16 y como mucho 1 GiB; sal de 16 a 64 bytes) y se rechaza el resto. El fichero nunca lleva la clave del almacén y se crea con permisos 0600. `mecha restore` fusiona sin sobrescribir: recalcula las huellas con la clave del almacén de destino (el HMAC depende de ella) para detectar duplicados, da un id nuevo si el id ya existe y reenlaza padres y datos informados. Sin terminal, la frase se lee de `MECHA_BACKUP_PASSPHRASE_FILE` (0600), nunca de un argumento.
 
 ## UI/UX
 
@@ -437,7 +437,7 @@ La CLI comparte núcleo con la web y sirve para cron, CI y para quien vive en la
 | `mecha import .env` | Importa `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, `GOOGLE_API_KEY`, `XAI_API_KEY`, `OPENROUTER_API_KEY` y cualquier valor con prefijo reconocido |
 | `mecha link <herramienta>` | Vincula el fichero de sesión de `codex`, `claude-code` o `gemini-cli`; `--path` para rutas propias |
 | `mecha rm ID` | Borra una credencial y su historial |
-| `mecha export` y `mecha restore` | Copia cifrada con frase de paso |
+| `mecha export FILE` y `mecha restore FILE` | Copia cifrada con su propia frase de paso (credenciales, secretos y ajustes; sin historial); `restore` fusiona y nunca sobrescribe |
 | `mecha passphrase set` / `remove` | Define, cambia o quita la frase de paso de recuperación del almacén |
 
 `check` y `ls` siguen la convención de Nagios: salen con 0 si todo está verde, gris o solo local (OK), 1 si hay algún ámbar (aviso), 2 si hay algún rojo (crítico) y 3 si falla Mecha (desconocido). Cualquier error en esos dos comandos, incluidos los de uso como una opción mal escrita, sale con 3 y nunca con el 2 de Click, que un script leería como «hay rojo». Con `--strict`, `check` trata el gris como fallo y sale con 3; el rojo sigue ganando (2), y el gris gana al ámbar porque «no pude comprobarlo» no es un mero aviso. En el resto de comandos, 2 indica un error del usuario (opción inválida, clave duplicada o ambigua) y 3 un fallo de Mecha.
@@ -517,8 +517,16 @@ Decisiones de la fase:
 
 Frontend dentro del wheel, `uvx mecha-keys`, README con GIF del modo demo y copias cifradas.
 
-- [ ] `uvx mecha-keys` funciona en una máquina limpia con Linux, macOS y Windows.
-- [ ] `mecha export` y `mecha restore` recuperan todas las credenciales.
+Decisiones de la fase:
+
+- **Frontend obligatorio en el wheel y en el sdist.** `scripts/check_dist.py` lo exige en los dos y en un wheel reconstruido desde el sdist en un directorio limpio, sin `web/` ni Node. Si falla, no se publica.
+- **Publicación** (`.github/workflows/release.yml`, con un tag `vX.Y.Z`): se construye una sola vez; el CI falla si el tag no coincide con la versión de `pyproject.toml`; el wheel del propio build se instala en Linux, macOS y Windows (`uvx --from <wheel>`, nunca un índice ni `--extra-index-url` con TestPyPI); los mismos ficheros van a TestPyPI y después a PyPI, en el environment `pypi` con aprobación manual del mantenedor. Trusted Publishing (OIDC, sin tokens) con attestations de PyPI y de procedencia de GitHub. Todas las acciones van fijadas por SHA (Dependabot las mantiene) y el workflow no usa cachés. `skip-existing` solo en TestPyPI, para poder relanzar la release con la misma versión; en PyPI, nunca. Los environments `testpypi` y `pypi` solo se despliegan desde tags `v*`.
+- **README.** La tabla de capacidades se genera desde `capabilities.toml` y el CI falla si no coincide. El GIF sale de un script reproducible sobre el modo demo (`just gif`). Modelo de amenazas: protege los secretos en reposo (disco, copias de seguridad, sincronización, portátil perdido) y frente a otras webs y otros usuarios; no frente a código que ya se ejecuta con tu usuario.
+- **Seguridad.** `SECURITY.md`, con el reporte privado de vulnerabilidades de GitHub activado.
+- **Python 3.13 y 3.14** probados en Linux y declarados en los clasificadores.
+
+- [x] `uvx mecha-keys` funciona en una máquina limpia con Linux, macOS y Windows.
+- [x] `mecha export` y `mecha restore` recuperan todas las credenciales.
 
 ## Instrucciones para Claude Code y riesgos
 

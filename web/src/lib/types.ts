@@ -98,7 +98,13 @@ export interface Detection {
   warnings: string[]
 }
 
-export type Capability = 'yes' | 'no' | 'error_only' | 'admin_key' | 'management_key'
+export type Capability =
+  | 'yes'
+  | 'no'
+  | 'error_only'
+  | 'admin_key'
+  | 'management_key'
+  | 'admin_estimate'
 
 export interface ProbeInfo {
   model: string

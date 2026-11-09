@@ -67,10 +67,14 @@ def _chmod(path: Path, mode: int) -> None:
 def _connect(path: Path) -> sqlite3.Connection:
     _private_files()
     conn = sqlite3.connect(path, isolation_level=None, check_same_thread=False)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
-    conn.execute("PRAGMA secure_delete = ON")
-    conn.execute("PRAGMA journal_mode = WAL")
+    try:
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute("PRAGMA secure_delete = ON")
+        conn.execute("PRAGMA journal_mode = WAL")
+    except BaseException:
+        conn.close()  # e.g. "file is not a database": never leak the handle
+        raise
     return conn
 
 
@@ -387,12 +391,15 @@ def open_store(path: Path, prompt: keys.PassphrasePrompt | None = None) -> Store
 
 
 def _open_existing(path: Path, prompt: keys.PassphrasePrompt | None) -> Store:
+    conn: sqlite3.Connection | None = None
     try:
         conn = _connect(path)
         version = int(conn.execute("PRAGMA user_version").fetchone()[0])
-    except sqlite3.OperationalError as exc:
-        raise MechaError(f"Cannot open the store at {path}: {exc}.") from exc
     except sqlite3.DatabaseError as exc:
+        if conn is not None:
+            conn.close()  # never leak the handle on a failed open
+        if isinstance(exc, sqlite3.OperationalError):
+            raise MechaError(f"Cannot open the store at {path}: {exc}.") from exc
         raise StoreCorruptError(f"{path} is not a readable SQLite database.") from exc
     try:
         if version < 1:
@@ -446,6 +453,7 @@ def _create(path: Path, prompt: keys.PassphrasePrompt | None) -> Store:
             )
         passphrase = prompt("No system keyring. Choose a passphrase for the Mecha store", True)
 
+    conn: sqlite3.Connection | None = None
     try:
         _private_files()
         path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -463,6 +471,8 @@ def _create(path: Path, prompt: keys.PassphrasePrompt | None) -> Store:
         if passphrase is not None:
             store.set_passphrase(passphrase)
     except BaseException:
+        if conn is not None:
+            conn.close()
         if in_keyring:
             keys.keyring_delete(store_id)
         for suffix in ("", "-wal", "-shm", "-journal"):

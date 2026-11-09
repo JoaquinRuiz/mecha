@@ -148,6 +148,7 @@ export const es: Record<MessageKey, string> = {
   'cap.admin_key': 'con admin key',
   'cap.management_key': 'con clave de gestión',
   'cap.error_only': 'solo con errores',
+  'cap.admin_estimate': 'estimado con admin key',
   unknownFormat: 'Formato desconocido: elige proveedor y tipo.',
   ambiguousProvider: 'Este prefijo lo usan varios proveedores: confírmalo.',
   refreshToken: 'Parece un refresh token de OAuth. Mecha nunca guarda refresh tokens.',
