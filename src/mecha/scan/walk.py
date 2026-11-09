@@ -1,0 +1,229 @@
+"""The scan itself: walk the roots and the known places, read candidate files, report.
+
+Secrets only exist while a line is processed: each hit goes to ``fingerprint`` (the
+store's HMAC, or nothing when the store is locked) and is then dropped. Findings carry
+where the key is and its redacted form, never the key or the line.
+"""
+
+from __future__ import annotations
+
+import os
+from collections.abc import Callable, Iterator
+from dataclasses import dataclass, field
+from pathlib import Path
+
+from mecha.scan import fsio
+from mecha.scan.find import hits
+from mecha.scan.model import Finding, Location, PlaceKind, Risk, ScanReport
+from mecha.scan.places import (
+    EXCLUDED_NAMES,
+    Env,
+    Place,
+    excluded_dirs,
+    known_places,
+    protected_dirs,
+    session_files,
+    synced_dirs,
+)
+from mecha.scan.risk import GitIndex, GitState, Readability, inside, other_people
+
+MAX_FILE = 1024 * 1024  # 1 MiB
+MAX_NOTEBOOK = 20 * 1024 * 1024  # notebooks carry outputs
+
+Fingerprint = Callable[[str], str | None]
+Progress = Callable[[int, Path], None]
+
+
+@dataclass
+class Options:
+    roots: list[Path] = field(default_factory=list)  # empty: the home folder
+    include_protected: bool = False
+    max_size: int = MAX_FILE
+    max_notebook: int = MAX_NOTEBOOK
+
+
+class Scanner:
+    def __init__(
+        self,
+        env: Env,
+        options: Options,
+        fingerprint: Fingerprint,
+        progress: Progress | None = None,
+    ) -> None:
+        self.env = env
+        self.options = options
+        self.fingerprint = fingerprint
+        self.progress = progress
+        explicit = [Path(r).expanduser().absolute() for r in options.roots]
+        self.roots = explicit or [env.home]
+        self.excluded = excluded_dirs(env)
+        self.protected = [] if options.include_protected else protected_dirs(env)
+        self.synced = synced_dirs(env)
+        self.sessions = session_files(env)
+        self.git = GitIndex()
+        self.readability = Readability()
+        self.others = other_people(env)
+        self._seen: set[Path] = set()
+        self.report = ScanReport(roots=self.roots)
+
+    # --- what to read ---------------------------------------------------------------------
+    def _places(self) -> Iterator[tuple[Path, PlaceKind]]:
+        for place in known_places(self.env):
+            if not any(inside(place.path, [r]) for r in self.roots):
+                continue
+            yield from self._expand(place)
+
+    def _expand(self, place: Place) -> Iterator[tuple[Path, PlaceKind]]:
+        if place.pattern is None:
+            if place.path.is_file():
+                yield place.path, place.kind
+            return
+        try:
+            for match in sorted(place.path.glob(place.pattern)):
+                if match.is_file():
+                    yield match, place.kind
+        except OSError:
+            self.report.skipped.unreadable += 1
+
+    def _walk(self, root: Path) -> Iterator[Path]:
+        if root.is_file():
+            yield root
+            return
+        stack = [root]
+        while stack:
+            folder = stack.pop()
+            try:
+                entries = sorted(os.scandir(folder), key=lambda e: e.name)
+            except OSError:
+                self.report.skipped.unreadable += 1
+                continue
+            for entry in entries:
+                path = Path(entry.path)
+                try:
+                    if entry.is_symlink():
+                        target = path.resolve()
+                        if not any(inside(target, [r]) for r in self.roots):
+                            self.report.skipped.symlink_outside += 1
+                        continue  # inside a root it is scanned at its real place
+                    if entry.is_dir(follow_symlinks=False):
+                        if self._skip_dir(path, root):
+                            continue
+                        stack.append(path)
+                    elif entry.is_file(follow_symlinks=False):
+                        yield path
+                except OSError:
+                    self.report.skipped.unreadable += 1
+
+    def _skip_dir(self, path: Path, root: Path) -> bool:
+        if path.name in EXCLUDED_NAMES or path in self.excluded:
+            self.report.skipped.excluded_dir += 1
+            return True
+        # Asked for explicitly (the root is inside it): scanned. Otherwise only with the flag.
+        if path in self.protected and not inside(root, [path]):
+            self.report.skipped.protected_dir += 1
+            return True
+        return False
+
+    # --- reading ----------------------------------------------------------------------
+    def run(self) -> ScanReport:
+        if self.others is None:
+            self.report.warnings.append("readable_by_others_not_checked")
+        if self.git.git is None:
+            self.report.warnings.append("git_not_available")
+        for path, kind in self._places():
+            self._file(path, kind)
+        for root in self.roots:
+            for path in self._walk(root):
+                kind = PlaceKind.notebook if path.suffix == ".ipynb" else PlaceKind.text
+                self._file(path, kind)
+        return self.report
+
+    def _file(self, path: Path, kind: PlaceKind) -> None:
+        real = path.resolve()
+        if real in self._seen:
+            return
+        self._seen.add(real)
+        try:
+            st = os.stat(real)
+        except OSError:
+            self.report.skipped.unreadable += 1
+            return
+        if not fsio.is_regular(st):
+            return
+        if fsio.cloud_only(st):  # from attributes: opening it would download it
+            self.report.skipped.cloud_only += 1
+            return
+        limit = self.options.max_notebook if kind is PlaceKind.notebook else self.options.max_size
+        if st.st_size > limit:
+            self.report.skipped.too_large += 1
+            return
+        try:
+            candidate, binary = fsio.prefilter(real)
+        except OSError:
+            self.report.skipped.unreadable += 1
+            return
+        self.report.files_scanned += 1
+        if self.progress is not None:
+            self.progress(self.report.files_scanned, real)
+        if binary:
+            self.report.skipped.binary += 1
+            return
+        if not candidate:
+            return
+        session = self.sessions.get(real) or self.sessions.get(path)
+        risks, notes = self._risks(real, st, kind)
+        try:
+            for line, cell_line, offset, text in fsio.lines(real, kind):
+                for hit in hits(text, offset):
+                    det = hit.detection
+                    self.report.findings.append(
+                        Finding(
+                            location=Location(real, line, hit.column, cell_line, kind),
+                            provider=det.provider.value if det.provider else None,
+                            kind=det.kind.value if det.kind else None,
+                            pattern_id=det.pattern_id,
+                            redacted=det.redacted,
+                            confidence=hit.confidence,
+                            name=hit.name,
+                            storable=det.storable and session is None,
+                            session_file=session,
+                            risks=risks,
+                            notes=notes,
+                            fingerprint=self.fingerprint(hit.secret),
+                        )
+                    )
+        except OSError:
+            self.report.skipped.unreadable += 1
+
+    def _risks(
+        self, path: Path, st: os.stat_result, kind: PlaceKind
+    ) -> tuple[tuple[Risk, ...], tuple[str, ...]]:
+        risks: list[Risk] = []
+        notes: list[str] = []
+        if kind.is_history:
+            risks.append(Risk.shell_history)
+        if kind is PlaceKind.notebook:
+            risks.append(Risk.notebook)
+        state = self.git.state(path)
+        if state is GitState.tracked:
+            risks.append(Risk.git_tracked)
+        elif state is GitState.not_ignored:
+            risks.append(Risk.git_not_ignored)
+        elif state is GitState.unknown:
+            notes.append("git_unknown")
+        if inside(path, self.synced):
+            risks.append(Risk.synced_folder)
+        if self.others and self.readability.readable_by_others(path, st):
+            risks.append(Risk.readable_by_others)
+        return tuple(risks), tuple(notes)
+
+
+def read_token(location: Location) -> str | None:
+    """Re-read the key at a location (import): None if it is no longer there."""
+    for line, cell_line, offset, text in fsio.lines(location.path, location.kind):
+        if line != location.line or cell_line != location.cell_line:
+            continue
+        for hit in hits(text, offset):
+            if hit.column == location.column:
+                return hit.secret
+    return None
