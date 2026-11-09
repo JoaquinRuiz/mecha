@@ -130,7 +130,7 @@ uv run mecha serve   # serve the built UI on http://127.0.0.1:7878
 
 Each server start generates a random session token and opens `http://127.0.0.1:7878/#t=<token>`. The page keeps the token in `sessionStorage` (so reloads work) and sends it as `Authorization: Bearer`. Every `/api/*` request without it gets `401`, and any `Host` other than `127.0.0.1:<port>` or `localhost:<port>` gets `400`.
 
-The web demo on GitHub Pages is the same frontend built with `vite.pages.config.ts`: the modules that talk to the local server are swapped for in-memory versions with the same interface (`web/src/demo`), replaying answers that `scripts/dump_demo.py` records from `mecha serve --demo`. CI checks that the data is current, that the real app contains no demo code and that the demo contains no `/api` client. It is deployed on every release.
+The web demo on GitHub Pages is the same frontend built with `vite.pages.config.ts`: the modules that talk to the local server are swapped for in-memory versions with the same interface (`web/src/demo`), replaying answers that `scripts/dump_demo.py` records from `mecha serve --demo`. CI checks that the data is current, that the real app contains no demo code and that the demo contains no `/api` client. It is deployed by the release workflow, after PyPI and the GitHub release.
 
 The README capability table is generated from `src/mecha/data/capabilities.toml` (`uv run python scripts/gen_capabilities.py`); CI fails if it is out of date.
 

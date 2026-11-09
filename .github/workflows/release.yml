@@ -2,7 +2,8 @@ name: Release
 
 # Pushing a tag vX.Y.Z builds the distributions once, tests them, publishes the same files
 # to TestPyPI and then (after manual approval in the `pypi` environment) to PyPI, with
-# Trusted Publishing (OIDC, no tokens) and attestations. Every action is pinned by commit
+# Trusted Publishing (OIDC, no tokens) and attestations; then the GitHub release, and last
+# the web demo on GitHub Pages (pages.yml, called on the same tag). Every action is pinned by commit
 # SHA (Dependabot keeps them current) and no cache is used: a moved tag or a poisoned cache
 # must not be able to change the files before they are attested.
 #
@@ -145,3 +146,13 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" --generate-notes --verify-tag
+
+  pages:
+    name: web demo
+    # Only after PyPI and the GitHub release went well (github-release needs pypi).
+    needs: github-release
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    uses: ./.github/workflows/pages.yml
