@@ -29,6 +29,26 @@ async function load(page: Page) {
   await expect(page.getByTestId('credential-card')).toHaveCount(20)
 }
 
+test('a late event stream does not reload the listing (only a reconnect does)', async ({
+  page,
+}) => {
+  const problems = await guard(page)
+  // Open the event stream well after the listing arrived (a slow CI made this race real).
+  await page.route('**/api/events', async (route) => {
+    await new Promise((r) => setTimeout(r, 1500))
+    await route.continue()
+  })
+  const listings: string[] = []
+  page.on('request', (r) => {
+    if (new globalThis.URL(r.url()).pathname === '/api/credentials') listings.push(r.url())
+  })
+  await page.goto(URL)
+  await expect(page.getByTestId('credential-card')).toHaveCount(20)
+  await page.waitForTimeout(2500)
+  expect(listings).toHaveLength(1)
+  expect(problems).toEqual([])
+})
+
 test('loads 20 demo credentials in under 1 s (median of 5) with one listing request', async ({
   page,
 }) => {

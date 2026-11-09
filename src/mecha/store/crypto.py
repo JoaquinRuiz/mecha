@@ -88,6 +88,16 @@ class Cipher:
         except InvalidTag as exc:
             raise StoreCorruptError("A stored secret failed authentication.") from exc
 
+    def encrypt_record(self, data: bytes, aad: bytes) -> bytes:
+        """Encrypt non-secret but sensitive data (e.g. where plaintext keys were found)."""
+        return _seal(self.enc_key, data, aad)
+
+    def decrypt_record(self, blob: bytes, aad: bytes) -> bytes:
+        try:
+            return _open(self.enc_key, blob, aad)
+        except InvalidTag as exc:
+            raise StoreCorruptError("A stored record failed authentication.") from exc
+
     def fingerprint(self, secret: str) -> str:
         digest = hmac.new(self.fp_key, secret.encode("utf-8"), hashlib.sha256).hexdigest()
         return digest[:FINGERPRINT_CHARS]

@@ -9,7 +9,7 @@ import asyncio
 import builtins
 import logging
 from collections.abc import Callable, Iterable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -33,6 +33,7 @@ from mecha.core.models import (
     Credential,
     CredentialFacts,
     CredentialKind,
+    ExposureSummary,
     Fact,
     Funds,
     FundsInfo,
@@ -59,6 +60,12 @@ from mecha.linked import (
 )
 from mecha.providers import get_provider
 from mecha.providers.base import ChildRef, KeyUpdate, Provider, ProviderContext, remote_kinds
+from mecha.scan.model import Confidence as ScanConfidence
+from mecha.scan.model import Finding, ScanReport
+from mecha.scan.places import Env as ScanEnv
+from mecha.scan.risk import inside as scan_inside
+from mecha.scan.walk import Options as ScanOptions
+from mecha.scan.walk import Scanner, read_token
 from mecha.store.db import Store
 
 log = logging.getLogger(__name__)
@@ -185,6 +192,19 @@ def _remap_reporters(facts: CredentialFacts, id_map: dict[str, str]) -> Credenti
         if reason.by is not None:
             reason.by = id_map.get(reason.by, reason.by)
     return out
+
+
+def _not_importable(f: Finding) -> str | None:
+    """Why a finding cannot be imported (None: it can)."""
+    if f.stored_id is not None:
+        return "duplicate"
+    if f.session_file is not None:
+        return "session_file"  # link the file instead: `mecha link`
+    if not f.storable:
+        return "not_storable"  # e.g. an OAuth refresh token
+    if f.confidence is not ScanConfidence.high:
+        return "low_confidence"  # unknown provider: add it by hand if it is an AI key
+    return None
 
 
 def forget_reporter(facts: CredentialFacts, reporter: str) -> CredentialFacts:
@@ -436,7 +456,12 @@ class MechaService:
         return cred.kind is CredentialKind.api_key and self.is_remote(cred)
 
     async def _observe(
-        self, cred: Credential, provider: Provider, *, active: bool = False
+        self,
+        cred: Credential,
+        provider: Provider,
+        *,
+        active: bool = False,
+        secret: str | None = None,
     ) -> Observation:
         now = self._now()
         probes = self.config.probes
@@ -448,7 +473,8 @@ class MechaService:
             cached_probe_model=cred.facts.probe_model,
             probe_free=probes.free,
         )
-        secret = self.store.secret(cred.id)
+        if secret is None:
+            secret = self.store.secret(cred.id)
         if secret is None:  # pragma: no cover - only linked files have no secret (phase 4)
             return Observation(check_status=CheckStatus.failed, observed_at=now)
         try:
@@ -743,6 +769,164 @@ class MechaService:
             else:
                 results.append({"index": index, "ok": True, "id": item.credential.id})
         return results
+
+    # --- mecha scan ---------------------------------------------------------------------
+    def scan(
+        self,
+        options: ScanOptions,
+        env: ScanEnv | None = None,
+        progress: Callable[[int, Path], None] | None = None,
+        *,
+        use_store: bool = True,
+    ) -> ScanReport:
+        """Find plaintext keys (offline). Locations of keys Mecha manages are kept encrypted;
+        the rest only appear in the returned report. With a locked store the scan still
+        runs, without the cross-reference, and says so."""
+        store: Store | None = None
+        if use_store:  # never create a store just to scan
+            try:
+                store = self.store
+            except MechaError:
+                store = None
+        fingerprint = store.cipher.fingerprint if store is not None else (lambda _s: None)
+        report = Scanner(env or ScanEnv.current(), options, fingerprint, progress).run()
+        if store is None:
+            report.warnings.append("store_locked" if use_store else "no_store")
+            return report
+        report.store_checked = True
+        stored: dict[str, str | None] = {}
+        out = []
+        for f in report.findings:
+            if f.fingerprint is not None and f.fingerprint not in stored:
+                stored[f.fingerprint] = store.by_fingerprint(f.fingerprint)
+            out.append(replace(f, stored_id=stored.get(f.fingerprint or "")))
+        report.findings = out
+        self._save_exposures(store, report)
+        return report
+
+    def _save_exposures(self, store: Store, report: ScanReport) -> None:
+        """Per stored key: replace its locations under the scanned roots, keep the others."""
+        now = self._now()
+        found: dict[str, list[dict[str, object]]] = {}
+        for f in report.findings:
+            if f.stored_id is None:
+                continue
+            found.setdefault(f.stored_id, []).append(
+                {
+                    "path": str(f.location.path),
+                    "line": f.location.line,
+                    "cell_line": f.location.cell_line,
+                    "column": f.location.column,
+                    "risks": [r.value for r in f.risks],
+                    "seen_at": now.isoformat(),
+                }
+            )
+        ids = set(found) | set(store.exposure_ids())
+        for cred_id in ids:
+            cred = store.get(cred_id)
+            if cred is None:
+                continue
+            kept = [
+                item
+                for item in store.exposures(cred_id)
+                if not scan_inside(Path(str(item["path"])), report.roots)
+            ]
+            items = kept + found.get(cred_id, [])
+            store.set_exposures(cred_id, items, now)
+            facts = cred.facts.model_copy(deep=True)
+            risky = sum(1 for item in items if item["risks"])
+            facts.exposure = (
+                ExposureSummary(risky=risky, info=len(items) - risky, scanned_at=now)
+                if items
+                else None
+            )
+            store.set_facts(cred_id, facts)
+
+    def exposures(self, id_or_prefix: str) -> builtins.list[dict[str, object]]:
+        """Where a stored key was found in plaintext (decrypted on demand)."""
+        cred = self.get(id_or_prefix).credential
+        return self.store.exposures(cred.id)
+
+    def import_found(
+        self, report: ScanReport, ids: Iterable[str]
+    ) -> builtins.list[dict[str, object]]:
+        """Import chosen findings. The report holds no secrets: each key is read again from
+        its file, and must still be the same key (same fingerprint) at the same place."""
+        by_id = {f.location.id: f for f in report.findings}
+        results: builtins.list[dict[str, object]] = []
+        for fid in ids:
+            f = by_id.get(fid)
+            if f is None:
+                results.append({"id": fid, "ok": False, "code": "not_found"})
+                continue
+            reason = _not_importable(f)
+            if reason is not None:
+                results.append({"id": fid, "ok": False, "code": reason})
+                continue
+            secret = read_token(f.location)
+            if secret is None or (
+                f.fingerprint is not None and self.store.cipher.fingerprint(secret) != f.fingerprint
+            ):
+                results.append({"id": fid, "ok": False, "code": "changed"})
+                continue
+            label = f.name or f"{f.location.path.name}:{f.location.line}"
+            try:
+                item = self.add(secret, label=label)
+            except MechaError as exc:
+                results.append({"id": fid, "ok": False, "code": exc.code, "message": exc.message})
+            else:
+                results.append({"id": fid, "ok": True, "credential_id": item.credential.id})
+            finally:
+                del secret
+        return results
+
+    @staticmethod
+    def check_candidates(report: ScanReport) -> builtins.list[Finding]:
+        """What --check would send: high confidence, not in Mecha, one per distinct key."""
+        seen: set[str] = set()
+        out = []
+        for f in report.findings:
+            if f.confidence is not ScanConfidence.high or f.stored_id or not f.provider:
+                continue
+            if f.session_file or f.kind not in {"api_key", "admin_key", "management_key"}:
+                continue
+            key = f.fingerprint or f.location.id
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(f)
+        return out
+
+    async def check_found(self, report: ScanReport) -> ScanReport:
+        """Validate found keys against their own provider's free endpoint (never a paid
+        probe), without storing anything. Invalid or revoked keys stop being amber."""
+        results: dict[str, str] = {}
+        for f in self.check_candidates(report):
+            secret = read_token(f.location)
+            if secret is None:
+                continue
+            provider = get_provider(ProviderId(f.provider or ""))
+            if provider is None:
+                continue
+            try:
+                cred = Credential(
+                    id="scan-check",
+                    label="scan",
+                    provider=ProviderId(f.provider or ""),
+                    kind=CredentialKind(f.kind or "api_key"),
+                    redacted=f.redacted,
+                    fingerprint="",
+                    created_at=self._now(),
+                )
+                obs = await self._observe(cred, provider, secret=secret)
+                result = evaluate(cred, obs, self._now(), self.thresholds)
+                results[f.fingerprint or f.location.id] = result.validity.value.value
+            finally:
+                del secret
+        report.findings = [
+            replace(f, check=results.get(f.fingerprint or f.location.id)) for f in report.findings
+        ]
+        return report
 
     # --- encrypted backups -------------------------------------------------------------
     def export_payload(self) -> dict[str, Any]:

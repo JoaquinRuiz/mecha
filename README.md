@@ -78,6 +78,21 @@ Checks only use each provider's free endpoint (no tokens are spent) and only rea
 
 The store key lives in the system keyring. Without a keyring (headless Linux, cron), set `MECHA_PASSPHRASE_FILE` to a `0600` file holding the passphrase (or `MECHA_PASSPHRASE`). `MECHA_HOME` overrides the data directory.
 
+### Finding keys in plaintext
+
+```bash
+mecha scan                       # your home folder, AI tool configs and shell histories
+mecha scan ~/Development --json  # only these folders
+mecha scan --import 3f9a1c2b7d   # import a finding (the file is read again)
+mecha scan --check               # validate found keys with their own provider (asks first)
+```
+
+`mecha scan` looks for AI keys lying around on this machine and lists each one with its file and line, redacted: never the line itself. It runs offline (only `--check` sends keys, each to its own provider's free endpoint) and only when you run it. Everything is listed as information; it goes amber only where a key is a risk: shell history, notebooks, files tracked or not ignored in git, synced folders and files other people on this machine can read. Exit code: `0` nothing risky, `1` something amber, `3` an error. Keys that only look like `AIza…` or a bare `sk-…` are listed apart, as low confidence: they may belong to another service.
+
+It reads the configs of Claude Desktop, Cursor, VS Code, Windsurf and Continue and the zsh, bash, fish and PowerShell histories, and skips dependencies, caches, virtual environments, local model stores, large and binary files, and files that only exist in the cloud (opening those would download them). On macOS, Desktop, Documents, Downloads, iCloud Drive and `~/Library/CloudStorage` are only scanned with `--include-protected`, because the system asks for permission. Where a key Mecha keeps was also found is stored encrypted, and its card turns amber; other locations are never stored.
+
+**On company laptops**: a program that reads shell histories and config files looking for keys behaves like an infostealer, so security tools (EDR) may flag `mecha scan`. It never runs on its own.
+
 ### Backups
 
 `mecha export FILE` writes every credential (secrets, labels, tags, notes, budgets and probe settings; not the check history) encrypted with AES-256-GCM under a key derived from a passphrase you choose (at least 12 characters; Argon2id). The file is created with `0600` permissions and its header names the format, the key derivation function and its parameters, which are checked against upper bounds before any key is derived, so a tampered file cannot demand huge amounts of memory. The store's own key is never written, so a backup opens on any machine with its passphrase. There is no plaintext export.

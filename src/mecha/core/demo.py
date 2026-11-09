@@ -438,7 +438,12 @@ class DemoService(MechaService):
         return False  # every demo check "runs"
 
     async def _observe(
-        self, cred: Credential, provider: Provider, *, active: bool = False
+        self,
+        cred: Credential,
+        provider: Provider,
+        *,
+        active: bool = False,
+        secret: str | None = None,  # unused: demo checks never use a secret
     ) -> Observation:
         scenario = self._scenarios.get(cred.id) or self._added_scenario(cred, provider)
         rng = random.Random(f"{SEED}:{cred.id}")  # noqa: S311

@@ -270,7 +270,35 @@ class Store:
 
     def delete(self, cred_id: str) -> bool:
         cur = self.conn.execute("DELETE FROM credentials WHERE id = ?", (cred_id,))
-        return cur.rowcount > 0
+        return cur.rowcount > 0  # its exposures go with it (ON DELETE CASCADE)
+
+    # --- exposures (mecha scan): encrypted, never in clear ----------------------------
+    def exposures(self, cred_id: str) -> list[dict[str, object]]:
+        row = self.conn.execute(
+            "SELECT blob FROM exposures WHERE credential_id = ?", (cred_id,)
+        ).fetchone()
+        if row is None:
+            return []
+        plain = self.cipher.decrypt_record(bytes(row["blob"]), b"exposure:" + cred_id.encode())
+        data: list[dict[str, object]] = json.loads(plain)
+        return data
+
+    def exposure_ids(self) -> list[str]:
+        return [r[0] for r in self.conn.execute("SELECT credential_id FROM exposures")]
+
+    def set_exposures(self, cred_id: str, items: list[dict[str, object]], at: datetime) -> None:
+        if not items:
+            self.conn.execute("DELETE FROM exposures WHERE credential_id = ?", (cred_id,))
+            return
+        blob = self.cipher.encrypt_record(
+            json.dumps(items, sort_keys=True).encode(), b"exposure:" + cred_id.encode()
+        )
+        self.conn.execute(
+            """INSERT INTO exposures (credential_id, blob, updated_at) VALUES (?, ?, ?)
+               ON CONFLICT(credential_id) DO UPDATE SET blob = excluded.blob,
+               updated_at = excluded.updated_at""",
+            (cred_id, blob, _ts(at)),
+        )
 
     # --- history ------------------------------------------------------------------
     def add_result(self, result: CheckResult, observation: Observation | None) -> None:

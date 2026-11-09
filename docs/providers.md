@@ -84,3 +84,28 @@ contradict the docs are marked ⚠.
 - OpenAI `redacted_value` examples: `sk-abc...def`, `sk-admin...def`.
 - Matching generates each provider's hint format from the decrypted secret; it never
   compares against Mecha's own `redacted` form.
+
+## Scan: known locations (checked 2026-11-09)
+
+`mecha scan` reads these by default, even where the home walk does not go (e.g. `~/Library`
+on macOS). Project-level files (`.cursor/mcp.json`, `.vscode/mcp.json`, `.mcp.json`,
+`.devin/mcp_config.json`, `.continue/…`) are found by the walk.
+
+| Tool | macOS | Linux | Windows | Source |
+| --- | --- | --- | --- | --- |
+| Claude Desktop | `~/Library/Application Support/Claude/claude_desktop_config.json` | `~/.config/Claude/claude_desktop_config.json` | `%APPDATA%\Claude\claude_desktop_config.json` | [modelcontextprotocol.io](https://modelcontextprotocol.io/docs/develop/connect-local-servers) |
+| Cursor | `~/.cursor/mcp.json` | same | `%USERPROFILE%\.cursor\mcp.json` | [cursor.com/docs/context/mcp](https://cursor.com/docs/context/mcp) (gives `~` only) |
+| VS Code | `~/Library/Application Support/Code/User/mcp.json` and `profiles/*/mcp.json` | `~/.config/Code/User/…` | `%APPDATA%\Code\User\…` | [MCP configuration](https://code.visualstudio.com/docs/agents/reference/mcp-configuration), [Profiles](https://code.visualstudio.com/docs/configure/profiles) (User folder = parent of `profiles`); also `Code - Insiders` and `~/.copilot/mcp-config.json` |
+| Windsurf (now Devin Desktop) | `~/.config/devin/mcp_config.json` | same | same under `%USERPROFILE%` | [docs.devin.ai](https://docs.devin.ai/desktop/cascade/mcp) (docs.windsurf.com redirects there) |
+| Windsurf (old path) | `~/.codeium/windsurf/mcp_config.json` | same | same | **Not in the current docs**; scanned as a legacy path |
+| Continue | `~/.continue/config.yaml` (and `config.json`), `~/.continue/mcpServers/*` | same | `%USERPROFILE%\.continue\…` | [Understanding configs](https://docs.continue.dev/guides/understanding-configs), [MCP](https://docs.continue.dev/customize/deep-dives/mcp) |
+| Continue secrets | `~/.continue/.env` | same | same | **Unverified**: only in mirrors of Continue's docs |
+
+| Shell history | Path | Source |
+| --- | --- | --- |
+| bash | `~/.bash_history` (`HISTFILE` default); timestamps as `#…` comment lines | [GNU Bash manual](https://www.gnu.org/software/bash/manual/html_node/Bash-Variables.html) |
+| zsh | No default `HISTFILE` in zsh; macOS sets `~/.zsh_history` in `/etc/zshrc`; extended format `: <time>:<elapsed>;<command>` | [zsh Parameters](https://zsh.sourceforge.io/Doc/Release/Parameters.html), [Options](https://zsh.sourceforge.io/Doc/Release/Options.html) |
+| `$HISTFILE` | When exported | |
+| fish | `~/.local/share/fish/fish_history` (or `$XDG_DATA_HOME/fish/`; `<session>_history` with `fish_history`) | [fish interactive use](https://fishshell.com/docs/current/interactive.html) |
+| PowerShell (PSReadLine) | `%APPDATA%\Microsoft\Windows\PowerShell\PSReadLine\<host>_history.txt`; elsewhere `$XDG_DATA_HOME/powershell/PSReadLine` or `~/.local/share/powershell/PSReadLine`. PSReadLine skips lines containing `apikey`, `token` or `secret`, but not `API_KEY` | [about_PSReadLine](https://learn.microsoft.com/en-us/powershell/module/psreadline/about/about_psreadline) |
+| macOS Terminal sessions | `~/.zsh_sessions/*.history*`, `~/.bash_sessions/*.history*` | `/etc/zshrc_Apple_Terminal`, `/etc/bashrc_Apple_Terminal` (on the system) |
