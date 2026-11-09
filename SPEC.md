@@ -540,7 +540,7 @@ Mecha en el navegador, sin instalar nada: https://joaquinruiz.github.io/mecha/
 - **Separación comprobada.** `scripts/check_web_builds.py` falla si la app real contiene código o datos de la demo (para que `mecha serve` nunca muestre datos inventados como si fueran tuyos) o si la demo contiene el cliente de `/api`.
 - **Aviso fijo** arriba, sin botón de cerrar: datos inventados, no envía nada; para usar tus claves, `uvx mecha-keys`.
 - **Título, descripción y Open Graph** con `docs/social.png` (1200×630).
-- **Despliegue.** `.github/workflows/pages.yml` en cada release publicada, con las acciones fijadas por SHA y sin cachés. Antes construye las dos apps, pasa los checks y la e2e de Playwright contra la build estática (ninguna petición fuera de sus ficheros, ningún error de CSP, axe). El environment `github-pages` solo acepta tags `v*`.
+- **Despliegue.** `.github/workflows/pages.yml` es un workflow reutilizable que `release.yml` llama como último job, sobre el tag y solo si PyPI y la release de GitHub han ido bien (se puede relanzar a mano sobre un tag con `workflow_dispatch`). No usa `release: published`, que no saltaría porque la release se crea con el `GITHUB_TOKEN`, ni `workflow_run`, que corre en el contexto de `main` y el environment lo rechazaría. Las acciones van fijadas por SHA y sin cachés. Antes construye las dos apps, pasa los checks y la e2e de Playwright contra la build estática (ninguna petición fuera de sus ficheros, ningún error de CSP, axe). El environment `github-pages` solo acepta tags `v*`.
 
 ## Instrucciones para Claude Code y riesgos
 

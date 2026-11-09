@@ -1,14 +1,18 @@
 name: Web demo (GitHub Pages)
 
 # Builds the static web demo (made-up data, no network: see web/vite.pages.config.ts) and
-# deploys it to https://joaquinruiz.github.io/mecha/ on every published release. Every
-# action is pinned by commit SHA (Dependabot keeps them current) and no cache is used.
-# The github-pages environment only accepts deployments from tags v*.
+# deploys it to https://joaquinruiz.github.io/mecha/. Every action is pinned by commit SHA
+# (Dependabot keeps them current) and no cache is used. The github-pages environment only
+# accepts deployments from tags v*.
+#
+# Reusable: release.yml calls it as its last job, on the tag, only after PyPI and the
+# GitHub release succeeded. (A `release: published` trigger would never fire: the release
+# is created with GITHUB_TOKEN, whose events do not start other workflows. `workflow_run`
+# would run in the context of main, which the environment rule rejects.)
 
 on:
-  release:
-    types: [published]
-  workflow_dispatch:  # re-run on a release tag (pick the tag as the ref)
+  workflow_call:
+  workflow_dispatch:  # re-run by hand: pick the release tag as the ref
 
 permissions:
   contents: read
