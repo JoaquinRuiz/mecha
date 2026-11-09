@@ -1,12 +1,30 @@
-# Mecha
+<div align="center">
 
-> How much fuse is left on your API keys?
+# 🧨 Mecha
+
+**How much fuse is left on your API keys?**
+
+[![CI](https://github.com/JoaquinRuiz/mecha/actions/workflows/ci.yml/badge.svg)](https://github.com/JoaquinRuiz/mecha/actions/workflows/ci.yml)
+[![PyPI](https://img.shields.io/pypi/v/mecha-keys?logo=pypi&logoColor=white&label=PyPI)](https://pypi.org/project/mecha-keys/)
+[![Python](https://img.shields.io/badge/python-3.12%20%7C%203.13%20%7C%203.14-3776AB?logo=python&logoColor=white)](https://pypi.org/project/mecha-keys/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+[![Local-first](https://img.shields.io/badge/local--first-127.0.0.1-orange)](#threat-model)
+[![No telemetry](https://img.shields.io/badge/telemetry-none-brightgreen)](#principles)
+
+[![Anthropic](https://img.shields.io/badge/Anthropic-191919?logo=anthropic&logoColor=white)](#what-each-provider-tells-mecha)
+[![OpenAI](https://img.shields.io/badge/OpenAI-412991)](#what-each-provider-tells-mecha)
+[![Gemini](https://img.shields.io/badge/Gemini-8E75B2?logo=googlegemini&logoColor=white)](#what-each-provider-tells-mecha)
+[![xAI](https://img.shields.io/badge/xAI-000000?logo=x&logoColor=white)](#what-each-provider-tells-mecha)
+[![OpenRouter](https://img.shields.io/badge/OpenRouter-6566F1?logo=openrouter&logoColor=white)](#what-each-provider-tells-mecha)
+
+</div>
 
 Mecha is a local-first dashboard (web + CLI) that tells you at a glance how much life each of your AI credentials has left: whether it works, whether it has funds, when it expires and what kind of key it is. It covers Anthropic, OpenAI, Google Gemini, xAI and OpenRouter, plus the session files of Codex, Claude Code and Gemini CLI.
 
 ![Mecha's dashboard in demo mode: one card per key with a traffic light, funds and the fuse to its expiry](https://raw.githubusercontent.com/JoaquinRuiz/mecha/main/docs/demo.gif)
 
-**Status:** alpha. See [SPEC.md](SPEC.md) (in Spanish) for the full design.
+> [!NOTE]
+> **Alpha.** See [SPEC.md](SPEC.md) (in Spanish) for the full design.
 
 ## Install
 
@@ -119,7 +137,7 @@ scripts/        release checks, README table generator, demo GIF recorder
 docs/           provider notes and architecture decision records (docs/adr/)
 ```
 
-Never use real API keys in tests, fixtures or commits.
+Never use real API keys in tests, fixtures or commits. See [CONTRIBUTING.md](CONTRIBUTING.md) to get involved.
 
 ## License
 
