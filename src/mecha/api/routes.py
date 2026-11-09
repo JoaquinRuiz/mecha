@@ -129,7 +129,9 @@ def error_response(exc: MechaError) -> JSONResponse:
     return JSONResponse(body, status_code=status)
 
 
-def _listing(ctx: ApiContext, items: list[CredentialStatus]) -> dict[str, Any]:
+def _listing(
+    ctx: ApiContext, items: list[CredentialStatus], position: dict[str, Any]
+) -> dict[str, Any]:
     return {
         "schema_version": SCHEMA_VERSION,
         "generated_at": ctx.service.now().isoformat(),  # the UI computes "3 h ago" from this
@@ -140,6 +142,8 @@ def _listing(ctx: ApiContext, items: list[CredentialStatus]) -> dict[str, Any]:
             "fuse_horizon_days": ctx.service.config.thresholds.fuse_horizon_days,
         },
         "credentials": [status_json(i) for i in items],
+        # The event position this listing was computed at (compared with the stream's hello).
+        "events": position,
     }
 
 
@@ -150,7 +154,8 @@ def _changed(ctx: ApiContext, cred_id: str | None = None) -> None:
 @router.get("/credentials")
 async def list_credentials(request: Request) -> dict[str, Any]:
     ctx = _ctx(request)
-    return _listing(ctx, ctx.service.list())
+    position = ctx.bus.position()  # before computing: never newer than the data
+    return _listing(ctx, ctx.service.list(), position)
 
 
 @router.post("/credentials", status_code=201)

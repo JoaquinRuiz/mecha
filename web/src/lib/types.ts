@@ -82,6 +82,8 @@ export interface Listing {
   demo: boolean
   settings: DisplaySettings
   credentials: CredentialStatus[]
+  /** Event position the listing was computed at (absent in the web demo). */
+  events?: { boot: string; seq: number }
 }
 
 export interface Detection {
