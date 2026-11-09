@@ -109,13 +109,19 @@ export function Dashboard({ token }: { token: string }) {
   const [tag, setTag] = useState('')
   const searchRef = useRef<HTMLInputElement>(null)
 
-  // Server events only invalidate queries; after a reconnect everything is reloaded.
+  // Server events only invalidate queries; after a *re*connect everything is reloaded
+  // (events may have been missed). Not on the first open: the initial queries are fresh,
+  // and reloading them then made a second listing request whenever the stream opened late.
   useEffect(() => {
     const controller = new AbortController()
+    let opened = false
     void connectEvents({
       token,
       signal: controller.signal,
-      onOpen: () => void qc.invalidateQueries(),
+      onOpen: () => {
+        if (opened) void qc.invalidateQueries()
+        opened = true
+      },
       onEvent: (type, data) => {
         const d = (data ?? {}) as { done?: number; total?: number }
         if (type === 'check_all_started') setProgress({ done: 0, total: d.total ?? 0 })

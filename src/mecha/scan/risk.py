@@ -12,6 +12,7 @@ import os
 import shutil
 import stat
 import subprocess
+import sys
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
@@ -97,12 +98,10 @@ NO_LOGIN = ("nologin", "false", "/sync", "/shutdown", "/halt")
 
 def other_people(env: Env) -> bool | None:
     """Are there other human accounts here? None when it cannot be told (Windows)."""
-    if env.platform == "win32":
+    if env.platform == "win32" or sys.platform == "win32":  # no pwd/getuid there (ACLs)
         return None
-    try:
-        import pwd
-    except ImportError:  # pragma: no cover - POSIX only
-        return None
+    import pwd
+
     minimum = 501 if env.platform == "darwin" else 1000
     me = os.getuid()
     for user in pwd.getpwall():
