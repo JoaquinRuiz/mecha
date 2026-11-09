@@ -99,6 +99,9 @@ def build() -> dict[str, Any]:
 
     with client() as c:
         listing = c.get("/api/credentials").json()
+        # The event position is per server start (random boot id): the web demo has its own
+        # in-page bus and never needs it.
+        listing.pop("events", None)
         providers = c.get("/api/providers").json()
         cred_ids = [item["credential"]["id"] for item in listing["credentials"]]
         history = {

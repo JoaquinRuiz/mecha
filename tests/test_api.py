@@ -154,12 +154,32 @@ async def test_event_stream_ends_when_bus_closes() -> None:
     await asyncio.sleep(0.12)  # at least one keepalive
     bus.close()
     await asyncio.wait_for(task, 1)
-    assert {"type": "credentials_changed", "id": "x"} in received
+    assert received[0] == {"type": "hello", "boot": bus.boot, "seq": 0}
+    assert {"type": "credentials_changed", "id": "x", "seq": 1} in received
     assert None in received
     assert bus.subscribers == 0
 
 
 test_event_stream_ends_when_bus_closes = pytest.mark.anyio(test_event_stream_ends_when_bus_closes)
+
+
+async def test_events_carry_a_sequence_and_hello_says_where_the_bus_is() -> None:
+    bus = EventBus()
+    assert bus.boot != EventBus().boot  # a restart never matches by chance
+    bus.publish({"type": "credentials_changed"})  # before anyone listens: only counted
+    bus.publish({"type": "credentials_changed"})
+    assert bus.position() == {"boot": bus.boot, "seq": 2}
+    stream = bus.subscribe(keepalive=5)
+    assert await anext(stream) == {"type": "hello", "boot": bus.boot, "seq": 2}
+    bus.publish({"type": "check_all_done"})
+    assert await anext(stream) == {"type": "check_all_done", "seq": 3}
+    await stream.aclose()
+    assert bus.subscribers == 0  # leaving right after hello does not leak the queue
+
+
+test_events_carry_a_sequence_and_hello_says_where_the_bus_is = pytest.mark.anyio(
+    test_events_carry_a_sequence_and_hello_says_where_the_bus_is
+)
 
 
 async def test_events_endpoint_streams_and_closes() -> None:
@@ -187,9 +207,26 @@ async def test_events_endpoint_streams_and_closes() -> None:
     service.close()
     assert "event: check_all_done" in lines
     assert any(line.startswith("data: ") for line in lines)
+    # The first event says where the bus was when the stream opened.
+    first = next(i for i, line in enumerate(lines) if line.startswith("event: "))
+    assert lines[first] == "event: hello"
+    assert json.loads(lines[first + 1].removeprefix("data: ")) == {
+        "type": "hello",
+        "boot": ctx.bus.boot,
+        "seq": 0,
+    }
 
 
 test_events_endpoint_streams_and_closes = pytest.mark.anyio(test_events_endpoint_streams_and_closes)
+
+
+def test_listing_says_which_event_position_it_was_computed_at(
+    api: tuple[TestClient, ApiContext],
+) -> None:
+    client, ctx = api
+    assert client.get("/api/credentials").json()["events"] == {"boot": ctx.bus.boot, "seq": 0}
+    ctx.bus.publish({"type": "credentials_changed"})
+    assert client.get("/api/credentials").json()["events"]["seq"] == 1
 
 
 def test_events_require_the_token(api: tuple[TestClient, ApiContext]) -> None:

@@ -29,9 +29,7 @@ async function load(page: Page) {
   await expect(page.getByTestId('credential-card')).toHaveCount(20)
 }
 
-test('a late event stream does not reload the listing (only a reconnect does)', async ({
-  page,
-}) => {
+test('no events between the listing and a late stream: no reload', async ({ page }) => {
   const problems = await guard(page)
   // Open the event stream well after the listing arrived (a slow CI made this race real).
   await page.route('**/api/events', async (route) => {
@@ -46,6 +44,44 @@ test('a late event stream does not reload the listing (only a reconnect does)', 
   await expect(page.getByTestId('credential-card')).toHaveCount(20)
   await page.waitForTimeout(2500)
   expect(listings).toHaveLength(1)
+  expect(problems).toEqual([])
+})
+
+test('an event between the listing and the stream opening causes exactly one reload', async ({
+  page,
+}) => {
+  const problems = await guard(page)
+  const token = new globalThis.URL(URL).hash.replace('#t=', '')
+  const base = new globalThis.URL(URL).origin
+  const headers = { Authorization: `Bearer ${token}` }
+  // Hold the event stream until a change has happened on the server meanwhile.
+  let release: () => void = () => {}
+  const held = new Promise<void>((r) => {
+    release = r
+  })
+  await page.route('**/api/events', async (route) => {
+    await held
+    await route.continue()
+  })
+  const listings: string[] = []
+  page.on('request', (r) => {
+    if (new globalThis.URL(r.url()).pathname === '/api/credentials') listings.push(r.url())
+  })
+  await page.goto(URL)
+  await expect(page.getByTestId('credential-card')).toHaveCount(20)
+  expect(listings).toHaveLength(1)
+  // A change the page cannot hear about yet (its stream is not open): publishes one event.
+  const list = await (await page.request.get(`${base}/api/credentials`, { headers })).json()
+  const id = list.credentials[0].credential.id as string
+  const patched = await page.request.patch(`${base}/api/credentials/${id}`, {
+    headers,
+    data: { label: 'Renamed meanwhile' },
+  })
+  expect(patched.ok()).toBe(true)
+  release()
+  await expect(page.getByRole('button', { name: 'Renamed meanwhile', exact: true })).toBeVisible()
+  await page.waitForTimeout(1500)
+  expect(listings).toHaveLength(2) // the initial one and exactly one reload
   expect(problems).toEqual([])
 })
 

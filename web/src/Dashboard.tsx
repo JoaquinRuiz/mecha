@@ -22,6 +22,7 @@ import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { useI18n, useSetLang } from '@/i18n'
 import { makeApi } from '@/lib/api'
 import { connectEvents } from '@/lib/events'
+import { type EventPosition, missedEvents } from '@/lib/sync'
 import { type CredentialStatus, DEFAULT_SETTINGS, OVERALL_ORDER, type Overall } from '@/lib/types'
 
 // Loaded on first use: the detail sheet carries the chart library, which the first paint
@@ -109,20 +110,34 @@ export function Dashboard({ token }: { token: string }) {
   const [tag, setTag] = useState('')
   const searchRef = useRef<HTMLInputElement>(null)
 
-  // Server events only invalidate queries; after a *re*connect everything is reloaded
-  // (events may have been missed). Not on the first open: the initial queries are fresh,
-  // and reloading them then made a second listing request whenever the stream opened late.
+  // Server events only invalidate queries. Each stream (first open or reconnect) starts
+  // with `hello` and the bus position; everything is reloaded only if the listing is from
+  // before it (events were missed) or from another server start: never otherwise.
+  const listingAt = useRef<EventPosition | undefined>(undefined)
+  const helloAt = useRef<EventPosition | undefined>(undefined)
+  const syncIfMissed = useCallback(() => {
+    if (missedEvents(listingAt.current, helloAt.current)) {
+      helloAt.current = undefined // one reload per hello
+      void qc.invalidateQueries()
+    }
+  }, [qc])
+  const listingEvents = listing.data?.events
+  useEffect(() => {
+    listingAt.current = listingEvents
+    syncIfMissed() // a listing that arrives after the hello is compared too
+  }, [listingEvents, syncIfMissed])
+
   useEffect(() => {
     const controller = new AbortController()
-    let opened = false
     void connectEvents({
       token,
       signal: controller.signal,
-      onOpen: () => {
-        if (opened) void qc.invalidateQueries()
-        opened = true
-      },
       onEvent: (type, data) => {
+        if (type === 'hello') {
+          helloAt.current = data as EventPosition
+          syncIfMissed()
+          return
+        }
         const d = (data ?? {}) as { done?: number; total?: number }
         if (type === 'check_all_started') setProgress({ done: 0, total: d.total ?? 0 })
         if (type === 'check_progress') setProgress({ done: d.done ?? 0, total: d.total ?? 0 })
@@ -132,7 +147,7 @@ export function Dashboard({ token }: { token: string }) {
       },
     })
     return () => controller.abort()
-  }, [token, qc])
+  }, [token, qc, syncIfMissed])
 
   const checkAll = useMutation({
     mutationFn: api.checkAll,
