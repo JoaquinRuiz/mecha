@@ -270,3 +270,23 @@ test('import a .env from the add dialog (redacted preview, then import)', async 
   await expect(page.getByTestId('credential-card')).toHaveCount(20)
   expect(problems).toEqual([])
 })
+
+test('language switch: remembered across reloads; footer credits the author', async ({ page }) => {
+  const problems = await guard(page)
+  await page.goto(URL)
+  await expect(page.locator('[data-testid="credential-card"]').first()).toBeVisible()
+  const startsInSpanish = (await page.locator('html').getAttribute('lang')) === 'es'
+  const toggle = page.getByTestId('lang-toggle')
+  await toggle.click()
+  const target = startsInSpanish ? /^Check all$/ : /^Comprobar todo$/
+  await expect(page.getByRole('button', { name: target })).toBeVisible()
+  await page.reload()
+  await expect(page.getByRole('button', { name: target })).toBeVisible()
+  const footer = page.getByRole('contentinfo')
+  await expect(footer).toContainText('JoaquinRuiz')
+  await expect(footer.getByRole('link', { name: /YouTube/ })).toHaveAttribute(
+    'href',
+    'https://youtube.com/@jokioki',
+  )
+  expect(problems).toEqual([])
+})

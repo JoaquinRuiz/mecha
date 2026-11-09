@@ -11,6 +11,16 @@
   root.classList.toggle('dark', theme === 'dark')
   root.classList.toggle('light', theme === 'light')
   root.style.colorScheme = theme
-  const lang = (navigator.languages?.[0] || navigator.language || 'en').toLowerCase()
-  root.lang = lang.startsWith('es') ? 'es' : 'en'
+  // A language chosen in the app wins; otherwise the browser's.
+  let lang = ''
+  try {
+    lang = window.localStorage.getItem('mecha.lang') || ''
+  } catch {
+    // storage blocked: use the browser's language
+  }
+  if (lang !== 'es' && lang !== 'en') {
+    const browser = (navigator.languages?.[0] || navigator.language || 'en').toLowerCase()
+    lang = browser.startsWith('es') ? 'es' : 'en'
+  }
+  root.lang = lang
 })()

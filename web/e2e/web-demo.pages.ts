@@ -136,6 +136,20 @@ test('delete works in memory and a reload brings the demo back', async ({ page }
   expect(problems).toEqual([])
 })
 
+test('footer and language switch work in the web demo', async ({ page }) => {
+  const { problems, requests } = await guard(page)
+  await open(page)
+  const footer = page.getByRole('contentinfo')
+  await expect(footer).toContainText('Made by JoaquinRuiz')
+  await expect(footer.getByRole('link')).toHaveCount(5)
+  await page.getByTestId('lang-toggle').click()
+  await expect(page.getByRole('button', { name: /^Comprobar todo$/ })).toBeVisible()
+  await expect(footer).toContainText('Hecho por JoaquinRuiz')
+  await expect(page.getByTestId('static-banner')).toContainText('Demo web con datos inventados')
+  expect(requests.every((u) => u.startsWith(URL))).toBe(true) // links are not followed
+  expect(problems).toEqual([])
+})
+
 for (const theme of ['dark', 'light'] as const) {
   test(`no axe violations in the ${theme} theme`, async ({ page }) => {
     await page.addInitScript((t) => window.localStorage.setItem('mecha.theme', t), theme)
