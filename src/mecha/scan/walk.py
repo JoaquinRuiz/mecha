@@ -75,6 +75,14 @@ class Scanner:
         self.report = ScanReport(
             roots=self.roots, max_size=options.max_size, max_notebook=options.max_notebook
         )
+        # Protected folders the walk never reaches because they sit inside an excluded one
+        # (iCloud Drive and ~/Library/CloudStorage, inside ~/Library): with the flag they are
+        # walked as extra starting points. report.roots stays what was asked.
+        self.extra_roots = (
+            [p for p in protected_dirs(env) if self._behind_excluded(p)]
+            if options.include_protected
+            else []
+        )
 
     # --- what to read ---------------------------------------------------------------------
     def _places(self) -> Iterator[tuple[Path, PlaceKind]]:
@@ -99,6 +107,28 @@ class Scanner:
         except OSError:
             self.report.skipped.unreadable += 1
             self._not_read(place.path)
+
+    def _under_roots(self, folder: Path) -> bool:
+        """Strictly below a root, and no root inside it (a root inside it is asked for)."""
+        return any(r in folder.parents for r in self.roots) and not any(
+            inside(r, [folder]) for r in self.roots
+        )
+
+    def _behind_excluded(self, folder: Path) -> bool:
+        if not self._under_roots(folder):
+            return False
+        return any(
+            inside(folder, [e]) and any(r in e.parents for r in self.roots) for e in self.excluded
+        )
+
+    def _skip_protected(self, folder: Path) -> None:
+        """Count a protected folder as skipped, once. Never looks inside it."""
+        real = folder.resolve()
+        if real in self.report.protected_skipped:
+            return
+        self.report.skipped.protected_dir += 1
+        self.report.not_read.add(real)
+        self.report.protected_skipped.add(real)
 
     def _not_read(self, path: Path) -> None:
         try:
@@ -153,9 +183,7 @@ class Scanner:
             return True
         # Asked for explicitly (the root is inside it): scanned. Otherwise only with the flag.
         if path in self.protected and not inside(root, [path]):
-            self.report.skipped.protected_dir += 1
-            self._not_read(path)
-            self.report.protected_skipped.add(path.resolve())
+            self._skip_protected(path)
             return True
         return False
 
@@ -165,9 +193,15 @@ class Scanner:
             self.report.warnings.append("readable_by_others_not_checked")
         if self.git.git is None:
             self.report.warnings.append("git_not_available")
+        # Without the flag every protected folder under the roots counts as skipped, also
+        # those the walk would never reach (inside ~/Library): a stored location there must
+        # be kept without a stat() inside. lexists() only looks at the folder's own entry.
+        for folder in self.protected:
+            if self._under_roots(folder) and os.path.lexists(folder):
+                self._skip_protected(folder)
         for path, kind in self._places():
             self._file(path, kind)
-        for root in self.roots:
+        for root in [*self.roots, *self.extra_roots]:
             for path in self._walk(root):
                 kind = PlaceKind.notebook if path.suffix == ".ipynb" else PlaceKind.text
                 self._file(path, kind)

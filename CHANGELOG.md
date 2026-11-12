@@ -25,6 +25,11 @@ All notable changes to this project are documented here. The format follows
 - `mecha scan --import` keeps where the key was found (it no longer waits for the next
   scan), and the same key found in two files is imported once instead of failing as a
   duplicate. Import also checks again that the file is not cloud-only or too large.
+- macOS: `--include-protected` and the dashboard's checkbox now really scan iCloud Drive
+  and `~/Library/CloudStorage` (Dropbox, Google Drive, OneDrive). Both sit inside
+  `~/Library`, which the walk skips, so they were never reached. Without the flag they
+  count as skipped protected folders, and a location stored there is kept without
+  looking inside.
 
 ## [0.2.0] - 2026-11-09
 

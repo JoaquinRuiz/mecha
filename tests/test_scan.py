@@ -14,6 +14,7 @@ import socket
 import stat
 import subprocess
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
 import httpx
@@ -711,6 +712,72 @@ def test_a_key_removed_from_a_config_inside_library_loses_its_location(
     svc.scan(Options(roots=[home]), env=darwin)
     assert stored_in(svc, cid) == []
     assert svc.get(cid).credential.facts.exposure is None
+
+
+def cloud_folders(home: Path) -> tuple[Path, Path]:
+    icloud = home / "Library" / "Mobile Documents" / "com~apple~CloudDocs"
+    dropbox = home / "Library" / "CloudStorage" / "Dropbox"
+    for folder in (icloud, dropbox):
+        folder.mkdir(parents=True)
+    return icloud, dropbox
+
+
+def test_include_protected_scans_icloud_drive_and_cloud_storage(
+    svc: MechaService, tree: Path
+) -> None:
+    """Both sit inside ~/Library, which the walk skips: the flag walks them anyway."""
+    home = tree / "home"
+    icloud, dropbox = cloud_folders(home)
+    (icloud / "notes.env").write_text(f"ANTHROPIC_API_KEY={ant()}\n")
+    (dropbox / "keys.env").write_text(f"ANTHROPIC_API_KEY={ant()}\n")
+    darwin = env(tree, "darwin")
+
+    report = svc.scan(Options(roots=[home], include_protected=True), env=darwin)
+    assert sorted(f.location.path.name for f in report.findings) == ["keys.env", "notes.env"]
+    assert all(f.risks == (Risk.synced_folder,) and f.amber for f in report.findings)
+    assert report.roots == [home]
+
+    report = svc.scan(Options(roots=[home]), env=darwin)
+    assert report.findings == []
+    assert report.skipped.protected_dir == 2  # counted although the walk never got there
+
+
+def test_without_the_flag_protected_folders_keep_locations_without_a_stat_inside(
+    svc: MechaService, tree: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = tree / "home"
+    key = ant()
+    cid = svc.add(key).credential.id
+    icloud, dropbox = cloud_folders(home)
+    (home / "Documents").mkdir()
+    for folder in (icloud, dropbox, home / "Documents"):
+        (folder / "k.env").write_text(f"ANTHROPIC_API_KEY={key}\n")
+    darwin = env(tree, "darwin")
+    svc.scan(Options(roots=[home], include_protected=True), env=darwin)
+    assert len(svc.exposures(cid)) == 3
+
+    protected = [p.resolve() for p in places.protected_dirs(darwin)]
+    touched: list[str] = []
+
+    def guard(real: Callable[..., object]) -> Callable[..., object]:
+        def call(path: object, *args: object, **kwargs: object) -> object:
+            resolved = Path(os.path.abspath(os.fspath(path)))  # type: ignore[call-overload]
+            if any(p in resolved.parents for p in protected):
+                touched.append(str(resolved))
+                raise PermissionError("macOS would ask for permission here")
+            return real(path, *args, **kwargs)
+
+        return call
+
+    real = {name: getattr(os, name) for name in ("stat", "lstat", "scandir")}
+    for name, fn in real.items():
+        monkeypatch.setattr(os, name, guard(fn))
+    report = svc.scan(Options(roots=[home]), env=darwin)  # the dashboard's default
+    for name, fn in real.items():
+        monkeypatch.setattr(os, name, fn)
+    assert touched == [], "looked inside a protected folder without the flag"
+    assert report.skipped.protected_dir == 3
+    assert len(svc.exposures(cid)) == 3, "locations in protected folders are kept"
 
 
 # --- importing ---------------------------------------------------------------------------
