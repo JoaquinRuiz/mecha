@@ -63,9 +63,8 @@ from mecha.providers.base import ChildRef, KeyUpdate, Provider, ProviderContext,
 from mecha.scan.model import Confidence as ScanConfidence
 from mecha.scan.model import Finding, ScanReport
 from mecha.scan.places import Env as ScanEnv
-from mecha.scan.risk import inside as scan_inside
+from mecha.scan.walk import NotReadable, Scanner, read_token
 from mecha.scan.walk import Options as ScanOptions
-from mecha.scan.walk import Scanner, read_token
 from mecha.store.db import Store
 
 log = logging.getLogger(__name__)
@@ -205,6 +204,42 @@ def _not_importable(f: Finding) -> str | None:
     if f.confidence is not ScanConfidence.high:
         return "low_confidence"  # unknown provider: add it by hand if it is an AI key
     return None
+
+
+def _exposure(f: Finding, seen_at: datetime) -> dict[str, object]:
+    return {
+        "path": str(f.location.path),
+        "line": f.location.line,
+        "cell_line": f.location.cell_line,
+        "column": f.location.column,
+        "risks": [r.value for r in f.risks],
+        "seen_at": seen_at.isoformat(),
+    }
+
+
+def finding_json(f: Finding) -> dict[str, Any]:
+    """A finding for the CLI's --json and the API: where and what, never the key or line."""
+    reason = _not_importable(f)
+    return {
+        "id": f.location.id,
+        "path": str(f.location.path),
+        "line": f.location.line,
+        "cell_line": f.location.cell_line,
+        "column": f.location.column,
+        "provider": f.provider,
+        "kind": f.kind,
+        "redacted": f.redacted,
+        "name": f.name,
+        "confidence": f.confidence.value,
+        "severity": "amber" if f.amber else "info",
+        "risks": [r.value for r in f.risks],
+        "notes": list(f.notes),
+        "stored_id": f.stored_id,
+        "session_file": f.session_file,
+        "importable": reason is None,
+        "not_importable": reason,
+        "check": f.check,
+    }
 
 
 def forget_reporter(facts: CredentialFacts, reporter: str) -> CredentialFacts:
@@ -778,20 +813,58 @@ class MechaService:
         progress: Callable[[int, Path], None] | None = None,
         *,
         use_store: bool = True,
+        stop: Callable[[], bool] | None = None,
     ) -> ScanReport:
         """Find plaintext keys (offline). Locations of keys Mecha manages are kept encrypted;
         the rest only appear in the returned report. With a locked store the scan still
         runs, without the cross-reference, and says so."""
-        store: Store | None = None
-        if use_store:  # never create a store just to scan
-            try:
-                store = self.store
-            except MechaError:
-                store = None
+        store = self.scan_store(use_store)
+        report = self.read_files(options, store, env, progress, stop)
+        return self.cross_reference(report, store, use_store=use_store)
+
+    # The scan in three steps, so the server can read files in a worker thread while every
+    # SQLite access stays on the event loop's thread (the connection is never shared).
+    scan_env: ScanEnv | None = None  # the machine scanned (tests inject a temporary home)
+
+    def scan_home(self) -> Path:
+        """The home folder a scan covers by default (the UI shows paths under it as ~)."""
+        return (self.scan_env or ScanEnv.current()).home
+
+    def scan_has_protected(self) -> bool:
+        """Whether this system has folders that need --include-protected (macOS)."""
+        return (self.scan_env or ScanEnv.current()).platform == "darwin"
+
+    def scan_store(self, use_store: bool = True) -> Store | None:
+        """The store to compare with, if it can be opened (never created just to scan)."""
+        if not use_store:
+            return None
+        try:
+            return self.store
+        except MechaError:
+            return None
+
+    def read_files(
+        self,
+        options: ScanOptions,
+        store: Store | None,
+        env: ScanEnv | None = None,
+        progress: Callable[[int, Path], None] | None = None,
+        stop: Callable[[], bool] | None = None,
+    ) -> ScanReport:
+        """Read the files and report what is found. Safe in another thread: from the store
+        it only uses the fingerprint key (an HMAC in memory), never the database."""
         fingerprint = store.cipher.fingerprint if store is not None else (lambda _s: None)
-        report = Scanner(env or ScanEnv.current(), options, fingerprint, progress).run()
+        env = env or self.scan_env or ScanEnv.current()
+        return Scanner(env, options, fingerprint, progress, stop).run()
+
+    def cross_reference(
+        self, report: ScanReport, store: Store | None, *, use_store: bool = True
+    ) -> ScanReport:
+        """Match findings with stored keys (by fingerprint) and save their locations."""
+        report.scanned_at = self._now()
         if store is None:
             report.warnings.append("store_locked" if use_store else "no_store")
+            report.forget_paths()
             return report
         report.store_checked = True
         stored: dict[str, str | None] = {}
@@ -802,45 +875,53 @@ class MechaService:
             out.append(replace(f, stored_id=stored.get(f.fingerprint or "")))
         report.findings = out
         self._save_exposures(store, report)
+        report.forget_paths()
         return report
 
+    def exposure_paths(self, id_or_prefix: str) -> builtins.list[Path]:
+        """The files a stored key was found in: what "scan these files again" reads."""
+        paths = {Path(str(item["path"])) for item in self.exposures(id_or_prefix)}
+        return sorted(paths)
+
+    def rescan_exposures(
+        self, id_or_prefix: str, env: ScanEnv | None = None
+    ) -> builtins.list[dict[str, object]]:
+        """Scan again only the files where this key was found (all in this thread)."""
+        cred = self.get(id_or_prefix).credential
+        paths = self.exposure_paths(cred.id)
+        if paths:
+            store = self.store
+            report = self.read_files(ScanOptions(roots=paths), store, env)
+            self.cross_reference(report, store)
+        return self.exposures(cred.id)
+
     def _save_exposures(self, store: Store, report: ScanReport) -> None:
-        """Per stored key: replace its locations under the scanned roots, keep the others."""
-        now = self._now()
+        """Per stored key: replace its locations in the files this scan read; keep those it
+        skipped or never reached; drop those whose file is gone (`ScanReport.keeps`)."""
+        now = report.scanned_at or self._now()
         found: dict[str, list[dict[str, object]]] = {}
         for f in report.findings:
-            if f.stored_id is None:
-                continue
-            found.setdefault(f.stored_id, []).append(
-                {
-                    "path": str(f.location.path),
-                    "line": f.location.line,
-                    "cell_line": f.location.cell_line,
-                    "column": f.location.column,
-                    "risks": [r.value for r in f.risks],
-                    "seen_at": now.isoformat(),
-                }
-            )
-        ids = set(found) | set(store.exposure_ids())
-        for cred_id in ids:
-            cred = store.get(cred_id)
-            if cred is None:
-                continue
+            if f.stored_id is not None:
+                found.setdefault(f.stored_id, []).append(_exposure(f, now))
+        for cred_id in set(found) | set(store.exposure_ids()):
             kept = [
-                item
-                for item in store.exposures(cred_id)
-                if not scan_inside(Path(str(item["path"])), report.roots)
+                item for item in store.exposures(cred_id) if report.keeps(Path(str(item["path"])))
             ]
-            items = kept + found.get(cred_id, [])
-            store.set_exposures(cred_id, items, now)
-            facts = cred.facts.model_copy(deep=True)
-            risky = sum(1 for item in items if item["risks"])
-            facts.exposure = (
-                ExposureSummary(risky=risky, info=len(items) - risky, scanned_at=now)
-                if items
-                else None
-            )
-            store.set_facts(cred_id, facts)
+            self._set_exposures(store, cred_id, kept + found.get(cred_id, []), now)
+
+    def _set_exposures(
+        self, store: Store, cred_id: str, items: builtins.list[dict[str, object]], now: datetime
+    ) -> None:
+        cred = store.get(cred_id)
+        if cred is None:
+            return
+        store.set_exposures(cred_id, items, now)
+        facts = cred.facts.model_copy(deep=True)
+        risky = sum(1 for item in items if item["risks"])
+        facts.exposure = (
+            ExposureSummary(risky=risky, info=len(items) - risky, scanned_at=now) if items else None
+        )
+        store.set_facts(cred_id, facts)
 
     def exposures(self, id_or_prefix: str) -> builtins.list[dict[str, object]]:
         """Where a stored key was found in plaintext (decrypted on demand)."""
@@ -850,35 +931,100 @@ class MechaService:
     def import_found(
         self, report: ScanReport, ids: Iterable[str]
     ) -> builtins.list[dict[str, object]]:
-        """Import chosen findings. The report holds no secrets: each key is read again from
-        its file, and must still be the same key (same fingerprint) at the same place."""
+        """Import chosen findings (the CLI: all in this thread)."""
+        wanted = builtins.list(ids)
+        return self.add_found(report, wanted, self.read_found(report, wanted, self.store))
+
+    def read_found(self, report: ScanReport, ids: Iterable[str], store: Store) -> dict[str, str]:
+        """Read the chosen keys again from their files, with the scan's checks (regular,
+        not cloud-only, size). Safe in a worker thread: only files and the HMAC key. Each
+        id maps to its secret, or to "!<code>" if it cannot be imported."""
         by_id = {f.location.id: f for f in report.findings}
-        results: builtins.list[dict[str, object]] = []
+        out: dict[str, str] = {}
         for fid in ids:
             f = by_id.get(fid)
-            if f is None:
-                results.append({"id": fid, "ok": False, "code": "not_found"})
+            reason = "not_found" if f is None else _not_importable(f)
+            if f is None or reason is not None:
+                out[fid] = f"!{reason}"
                 continue
-            reason = _not_importable(f)
-            if reason is not None:
-                results.append({"id": fid, "ok": False, "code": reason})
-                continue
-            secret = read_token(f.location)
-            if secret is None or (
-                f.fingerprint is not None and self.store.cipher.fingerprint(secret) != f.fingerprint
-            ):
-                results.append({"id": fid, "ok": False, "code": "changed"})
-                continue
-            label = f.name or f"{f.location.path.name}:{f.location.line}"
             try:
-                item = self.add(secret, label=label)
-            except MechaError as exc:
-                results.append({"id": fid, "ok": False, "code": exc.code, "message": exc.message})
-            else:
-                results.append({"id": fid, "ok": True, "credential_id": item.credential.id})
-            finally:
-                del secret
+                secret = read_token(f.location, report.max_size, report.max_notebook)
+            except NotReadable:
+                out[fid] = "!not_readable"
+                continue
+            except OSError:
+                out[fid] = "!not_readable"
+                continue
+            if secret is None or (
+                f.fingerprint is not None and store.cipher.fingerprint(secret) != f.fingerprint
+            ):
+                out[fid] = "!changed"
+                continue
+            out[fid] = secret
+        return out
+
+    def add_found(
+        self, report: ScanReport, ids: Iterable[str], secrets: dict[str, str]
+    ) -> builtins.list[dict[str, object]]:
+        """Add what `read_found` read (on the event loop: SQLite). Rows of one batch with
+        the same key are one credential: all ok, same id. Every row of the report with that
+        key turns "already in Mecha", and all of them become its stored locations."""
+        by_id = {f.location.id: f for f in report.findings}
+        results: builtins.list[dict[str, object]] = []
+        added: dict[str, str] = {}  # fingerprint -> credential id, in this batch
+        rows: dict[str, set[str]] = {}  # credential id -> chosen finding ids
+        try:
+            for fid in ids:
+                value = secrets.get(fid, "!not_found")
+                f = by_id.get(fid)
+                if value.startswith("!") or f is None:
+                    results.append({"id": fid, "ok": False, "code": value[1:] or "not_found"})
+                    continue
+                fingerprint = self._found_fingerprint(f, value)
+                cid = added.get(fingerprint)
+                if cid is None:
+                    try:
+                        cid = self._import_one(f, value, fingerprint)
+                    except MechaError as exc:
+                        results.append(
+                            {"id": fid, "ok": False, "code": exc.code, "message": exc.message}
+                        )
+                        continue
+                    added[fingerprint] = cid
+                rows.setdefault(cid, set()).add(fid)
+                results.append({"id": fid, "ok": True, "credential_id": cid})
+        finally:
+            secrets.clear()
+        if added:
+            self._link_found(report, added, rows)
         return results
+
+    def _found_fingerprint(self, f: Finding, secret: str) -> str:
+        return f.fingerprint or self.store.cipher.fingerprint(secret)
+
+    def _import_one(self, f: Finding, secret: str, fingerprint: str) -> str:
+        label = f.name or f"{f.location.path.name}:{f.location.line}"
+        return self.add(secret, label=label).credential.id
+
+    def _link_found(
+        self, report: ScanReport, added: dict[str, str], rows: dict[str, set[str]]
+    ) -> None:
+        """New credentials: mark their rows in the report and store where they were found."""
+        now = report.scanned_at or self._now()
+        by_fp = {fp: cid for fp, cid in added.items()}
+        out = []
+        locations: dict[str, builtins.list[dict[str, object]]] = {}
+        for f in report.findings:
+            cid = by_fp.get(f.fingerprint or "")
+            if cid is None:
+                cid = next((c for c, ids in rows.items() if f.location.id in ids), None)
+            if cid is not None:
+                f = replace(f, stored_id=cid)
+                locations.setdefault(cid, []).append(_exposure(f, now))
+            out.append(f)
+        report.findings = out
+        for cid, items in locations.items():
+            self._set_exposures(self.store, cid, items, now)
 
     @staticmethod
     def check_candidates(report: ScanReport) -> builtins.list[Finding]:
@@ -902,7 +1048,10 @@ class MechaService:
         probe), without storing anything. Invalid or revoked keys stop being amber."""
         results: dict[str, str] = {}
         for f in self.check_candidates(report):
-            secret = read_token(f.location)
+            try:
+                secret = read_token(f.location, report.max_size, report.max_notebook)
+            except (NotReadable, OSError):
+                continue
             if secret is None:
                 continue
             provider = get_provider(ProviderId(f.provider or ""))

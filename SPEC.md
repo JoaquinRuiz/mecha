@@ -346,6 +346,12 @@ El historial guarda un `CheckResult` por fila y conserva los últimos 500 por cr
 | GET | `/api/providers` | Matriz de capacidades, para que la UI sepa qué prometer |
 | POST | `/api/import/env` | Importa el contenido de un `.env` pegado o subido |
 | POST | `/api/linked` | Vincula un fichero de sesión OAuth por ruta |
+| POST | `/api/scan` | Escanea la carpeta personal en segundo plano (fase 6); solo admite `include_protected` |
+| POST | `/api/scan/stop` | Detiene el escaneo en curso; un escaneo detenido no guarda nada |
+| GET | `/api/scan` | Si hay uno en marcha y el último informe redactado, mientras se conserva (30 min) |
+| POST | `/api/scan/import` | Importa los hallazgos elegidos (`ids`), releyendo cada clave de su fichero |
+| GET | `/api/credentials/{id}/exposures` | Dónde se encontró en texto plano una clave guardada |
+| POST | `/api/credentials/{id}/exposures/rescan` | Vuelve a escanear solo esos ficheros (las rutas las pone el servidor) |
 | GET | `/api/events` | Flujo de eventos (formato SSE, leído con `fetch`) que solo dice qué cambió; la UI recarga por REST, y al reconectar lo recarga todo (sin `Last-Event-ID`). Keepalive cada 15 s; los flujos se cierran al apagar para que Ctrl+C no se cuelgue |
 | GET | `/api/health` | Estado del servidor |
 
@@ -542,9 +548,9 @@ Mecha en el navegador, sin instalar nada: https://joaquinruiz.github.io/mecha/
 - **Título, descripción y Open Graph** con `docs/social.png` (1200×630).
 - **Despliegue.** `.github/workflows/pages.yml` es un workflow reutilizable que `release.yml` llama como último job, sobre el tag y solo si PyPI y la release de GitHub han ido bien (se puede relanzar a mano sobre un tag con `workflow_dispatch`). No usa `release: published`, que no saltaría porque la release se crea con el `GITHUB_TOKEN`, ni `workflow_run`, que corre en el contexto de `main` y el environment lo rechazaría. Las acciones van fijadas por SHA y sin cachés. Antes construye las dos apps, pasa los checks y la e2e de Playwright contra la build estática (ninguna petición fuera de sus ficheros, ningún error de CSP, axe). El environment `github-pages` solo acepta tags `v*`.
 
-### Fase 6 · Escaneo de claves en texto plano (CLI)
+### Fase 6 · Escaneo de claves en texto plano
 
-Origen: issue #9 y el comentario con los ocho ajustes. Esta fase es solo la CLI (`mecha scan`); la pestaña del panel va en otro PR.
+Origen: issue #9 y el comentario con los ocho ajustes. La CLI (`mecha scan`) salió en la 0.2.0; la pestaña del panel y las ubicaciones en la ficha, en la 0.3.0 (ver «En el panel» al final).
 
 Mecha protege los secretos que guarda, pero no los que están sueltos en tu máquina. `mecha scan` busca claves de IA en texto plano, dice dónde están y cuáles de esas ubicaciones son un riesgo, sin importar nada por su cuenta.
 
@@ -575,7 +581,7 @@ Mecha protege los secretos que guarda, pero no los que están sueltos en tu máq
 Decisiones tras revisar el plan:
 
 - **Lectura.** Todos los ficheros de texto hasta 1 MiB (notebooks hasta 20 MiB), con un prefiltro por trozos que se solapan para no partir una clave. Se excluyen también los almacenes de modelos locales (`~/.ollama`, `~/.cache/huggingface`, `~/.lmstudio`).
-- **Ubicaciones guardadas** solo de claves que ya están en Mecha, cifradas con la clave del almacén (migración `003`, datos asociados `exposure:<id>`) y borradas con la credencial. Cada escaneo sustituye las de los ficheros que recorre. En los datos de la credencial solo quedan los recuentos, para el motivo ámbar «también en texto plano». Las de claves que Mecha no gestiona solo salen en la salida. Si no hay almacén todavía, el escaneo no crea uno.
+- **Ubicaciones guardadas** solo de claves que ya están en Mecha, cifradas con la clave del almacén (migración `003`, datos asociados `exposure:<id>`) y borradas con la credencial. Un escaneo solo sustituye las de los ficheros que ha leído (desde la 0.3.0): si se ha saltado el fichero (carpeta protegida o excluida, solo en la nube, demasiado grande, ilegible) o no ha llegado a él, se conservan; si el fichero ya no existe, se borran. Las configuraciones conocidas dentro de carpetas excluidas (`~/Library`, `AppData`) sí se leen, así que ahí manda lo leído. El informe trae qué leyó y qué se saltó, y esas listas se vacían tras el cruce. En los datos de la credencial solo quedan los recuentos, para el motivo ámbar «también en texto plano». Las de claves que Mecha no gestiona solo salen en la salida. Si no hay almacén todavía, el escaneo no crea uno.
 - **Legible por otros:** solo el permiso de lectura para otros (no el del grupo), con permiso de paso en todas las carpetas superiores, y ámbar solo si hay otras cuentas de persona en la máquina (UID ≥ 1000 con shell real en Linux, ≥ 501 en macOS). En Windows no se evalúa y se avisa.
 - **Git:** `-c core.fsmonitor=false`, sin bloqueos opcionales (no se refresca ni escribe el índice), sin preguntas y una sola llamada por repositorio: `ls-files --cached --others --exclude-standard` da a la vez los versionados y los no ignorados. Sin `git`, información con la nota «no se pudo comprobar git».
 - **Confianza baja** en un sitio de riesgo: ámbar en su bloque, pero no cambia el código de salida.
@@ -593,7 +599,7 @@ Decisiones tras revisar el plan:
   - En macOS, Escritorio, Documentos y Descargas solo se escanean si se piden expresamente, porque leerlos dispara el aviso de permisos del sistema.
 - **Portátiles de empresa.** Un proceso que lee historiales y ficheros de configuración buscando claves se comporta como un infostealer, y un EDR puede marcarlo. Por eso es solo bajo demanda, y el README lo dice.
 
-**Fuera de alcance:** el historial de git (para eso están gitleaks y trufflehog) y la pestaña del panel.
+**Fuera de alcance:** el historial de git (para eso están gitleaks y trufflehog).
 
 **Tests.** Nunca recorren el home real, tampoco en CI. Usan árboles temporales con claves inventadas, y un fixture hace fallar cualquier test que lea fuera de su árbol.
 
@@ -606,6 +612,26 @@ Decisiones tras revisar el plan:
 - [x] Las ubicaciones nunca se guardan en claro.
 - [x] Importar vuelve a leer el fichero y falla si la clave ya no está en esa línea.
 - [x] Se respetan las exclusiones, el tamaño máximo, los binarios, los enlaces fuera de las raíces y los ficheros solo en la nube, y se cuenta lo saltado. En macOS, Escritorio, Documentos y Descargas solo si se piden.
+
+**En el panel (0.3.0).** Una pestaña «Escanear» en el diálogo de añadir y una sección «Encontrada en texto plano» en la ficha de cada clave guardada, más `mecha where <id>` en la CLI.
+
+- **Solo la carpeta personal desde el navegador.** La API no acepta rutas: el único parámetro es la casilla de carpetas protegidas, que solo aparece en macOS. Las rutas arbitrarias siguen en la CLI.
+- **En segundo plano, con «Detener».** La lectura de ficheros corre en un hilo aparte (`asyncio.to_thread`); el cruce con las huellas y el guardado de las ubicaciones se hacen después en el bucle de eventos, para no compartir la conexión de SQLite entre hilos. El progreso (solo un recuento de ficheros, nunca rutas) se publica en el bus desde el bucle con `call_soon_threadsafe`, como mucho cada 250 ms. «Detener» corta entre dos ficheros, y un escaneo detenido no guarda nada, ni siquiera las ubicaciones, para que un recorrido a medias no borre las que había.
+- **El informe solo vive en memoria**, solo el último y como mucho 30 minutos: se descarta a tiempo aunque nadie lo vuelva a pedir. No tiene secretos; importar vuelve a leer cada línea como en la CLI.
+- **Importar** lee las claves en un hilo aparte, con las mismas comprobaciones que el escaneo (fichero regular, no solo en la nube, tamaño), y da de alta en el bucle. Las filas de un lote con la misma clave son una sola credencial (todas ok, mismo id); todas las filas del informe con esa huella pasan a «Ya en Mecha» y quedan como sus ubicaciones, con la fecha del escaneo, sin esperar al siguiente.
+- **Rutas nunca en una URL** (las URL acaban en el log de accesos): viajan solo en el cuerpo de las respuestas, nunca en eventos ni en logs. La interfaz las muestra con `~`. Un test recorre las rutas de la API y solo admite el id de la credencial y parámetros pequeños.
+- **Volver a escanear desde la ficha** recibe el id de la credencial, no rutas: lee solo los ficheros de las ubicaciones que el servidor ya tiene guardadas y las actualiza.
+- **`mecha serve --demo` nunca toca el disco**: el escaneo devuelve un resultado fijo de una carpeta personal inventada (`/home/demo`), para que quien grabe un vídeo con la demo no enseñe sus propias rutas. La demo web reproduce ese mismo resultado (`scripts/dump_demo.py`).
+- **Fuera de este PR:** `--check` en la web (issue aparte) e «ignorar esta ubicación».
+
+- [x] La pestaña escanea, muestra el progreso, se puede detener y lista lo encontrado redactado, por grupos (confianza alta, ya en Mecha, ficheros de sesión, confianza baja plegada), y se importan las elegidas.
+- [x] La ficha de una clave guardada dice dónde se encontró y permite volver a escanear esos ficheros.
+- [x] Ningún secreto en respuestas, eventos ni logs (canario); ninguna ruta en una URL ni en un evento.
+- [x] El bus solo se toca desde el bucle y el progreso va limitado a 4 por segundo; SQLite solo desde el bucle (cada consulta registra su hilo) y los ficheros nunca en el bucle.
+- [x] Lo que un escaneo no ha leído no borra ubicaciones; un fichero borrado sí las pierde.
+- [x] La clave importada guarda dónde se encontró, y la misma clave en dos ficheros se importa una vez.
+- [x] El informe se descarta a los 30 minutos.
+- [x] En modo demo el escaneo no lee el disco (test con la guarda de árbol temporal).
 
 ## Instrucciones para Claude Code y riesgos
 

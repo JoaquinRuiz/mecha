@@ -8,13 +8,16 @@
  */
 import type { Api, CredentialPatch, NewCredential } from '@/lib/api'
 import { ApiError } from '@/lib/errors'
-import type { CheckResult, CredentialStatus } from '@/lib/types'
+import type { CheckResult, CredentialStatus, ScanReport } from '@/lib/types'
 import { emit } from './bus'
-import { type Answer, loadDemoData, type Sample } from './data'
+import { type Answer, loadDemoData, type Sample, type ScanImport } from './data'
 
 export const NOT_AVAILABLE = 'not_available_in_demo'
 const PROBE_INTERVAL_MS = 60 * 60 * 1000
 const CHECK_ALL_STEP_MS = 120
+const SCAN_STEPS = 20
+const SCAN_STEP_MS = 75 // 1.5 s, like `mecha serve --demo`
+const SCAN_TTL_MS = 30 * 60 * 1000
 
 declare const __MECHA_VERSION__: string
 
@@ -39,7 +42,9 @@ function createState(now: () => number) {
   const samples = new Map<string, Sample>(data.samples.map((s) => [s.id, s]))
   const sampleOf = new Map<string, Sample>() // credential id -> sample it came from
   const edits = new Map<string, Partial<CredentialStatus['credential']>>()
-  return { data, items, history, samples, sampleOf, edits }
+  const importedOf = new Map<string, ScanImport>() // credential id -> scan finding import
+  const scan = { running: false, stop: false, report: null as ScanReport | null }
+  return { data, items, history, samples, sampleOf, edits, importedOf, scan }
 }
 
 export function makeApi(_token: string | null, now: () => number = Date.now): Api {
@@ -77,7 +82,7 @@ export function makeApi(_token: string | null, now: () => number = Date.now): Ap
   }
 
   const answerFor = (id: string, mode: 'check' | 'probe'): Answer | undefined => {
-    const sample = state.sampleOf.get(id)
+    const sample = state.sampleOf.get(id) ?? state.importedOf.get(id)
     if (sample) return sample[mode]
     return state.data[mode][id]
   }
@@ -184,6 +189,109 @@ export function makeApi(_token: string | null, now: () => number = Date.now): Ap
       notAvailable('Importing a .env file'),
     linkCandidates: () => notAvailable('Linking session files'),
     link: (_tool: string, _path?: string, _label?: string) => notAvailable('Linking session files'),
+
+    // The demo's scan: the recorded result of `mecha serve --demo` (a made-up home).
+    scanState: async () => ({
+      running: state.scan.running,
+      protected_option: state.data.scan.protected_option,
+      report: state.scan.report ? clone(state.scan.report) : null,
+    }),
+
+    scanStart: async (_includeProtected = false) => {
+      if (state.scan.running) {
+        throw new ApiError(409, 'scan_running', 'A scan is already running.')
+      }
+      const recorded = state.data.scan.report
+      if (!recorded) return notAvailable('Scanning')
+      state.scan = { running: true, stop: false, report: null }
+      emit('scan_started', {})
+      setTimeout(async () => {
+        for (let step = 1; step <= SCAN_STEPS; step++) {
+          await new Promise((r) => setTimeout(r, SCAN_STEP_MS))
+          if (state.scan.stop) {
+            state.scan.running = false
+            emit('scan_done', { cancelled: true, failed: false })
+            return
+          }
+          emit('scan_progress', { files: Math.floor((recorded.files_scanned * step) / SCAN_STEPS) })
+        }
+        const at = now()
+        const report = clone(recorded)
+        report.finished_at = new Date(at).toISOString()
+        report.expires_at = new Date(at + SCAN_TTL_MS).toISOString()
+        for (const f of report.findings) {
+          const imported = state.data.scan_imports[f.id]
+          const id = imported?.added.credential.id
+          if (id && state.items.has(id)) {
+            f.stored_id = id
+            f.importable = false
+            f.not_importable = 'duplicate'
+          }
+          if (f.stored_id && !state.items.has(f.stored_id)) f.stored_id = null // deleted here
+        }
+        state.scan = { running: false, stop: false, report }
+        emit('scan_done', {
+          cancelled: false,
+          failed: false,
+          files: report.files_scanned,
+          findings: report.findings.length,
+        })
+      }, 0)
+      return { started: true }
+    },
+
+    scanStop: async () => {
+      const stopping = state.scan.running
+      if (stopping) state.scan.stop = true
+      return { stopping }
+    },
+
+    scanImport: async (ids: string[]) => {
+      const report = state.scan.report
+      if (!report || (report.expires_at && Date.parse(report.expires_at) <= now())) {
+        state.scan.report = null
+        throw new ApiError(404, 'not_found', 'No scan to import from.')
+      }
+      const results = ids.map((fid) => {
+        const finding = report.findings.find((f) => f.id === fid)
+        const imported = state.data.scan_imports[fid]
+        if (!finding) return { id: fid, ok: false, code: 'not_found' }
+        if (!finding.importable || !imported) {
+          return { id: fid, ok: false, code: finding.not_importable ?? 'not_found' }
+        }
+        const item = clone(imported.added)
+        const id = item.credential.id
+        state.items.set(id, item)
+        state.importedOf.set(id, imported)
+        state.history.set(id, [])
+        finding.stored_id = id
+        finding.importable = false
+        finding.not_importable = 'duplicate'
+        return clone(imported.result)
+      })
+      if (results.some((r) => r.ok)) emit('credentials_changed', {})
+      return { results }
+    },
+
+    exposures: async (id: string) => {
+      get(id)
+      const home = state.data.scan.report?.home ?? ''
+      return clone(
+        state.data.exposures[id] ??
+          state.importedOf.get(id)?.exposures ?? { home, scanned_at: null, exposures: [] },
+      )
+    },
+
+    // The made-up files never change: scanning them again finds the same.
+    rescanExposures: async (id: string) => {
+      get(id)
+      await new Promise((r) => setTimeout(r, 300))
+      const home = state.data.scan.report?.home ?? ''
+      return clone(
+        state.data.exposures[id] ??
+          state.importedOf.get(id)?.exposures ?? { home, scanned_at: null, exposures: [] },
+      )
+    },
   }
 }
 

@@ -31,6 +31,7 @@ import type { Api } from '@/lib/api'
 import { STATIC_DEMO } from '@/lib/edition'
 import type { CredentialStatus, ProbeInfo, Signal, Source } from '@/lib/types'
 import { cn } from '@/lib/utils'
+import { ExposuresSection } from './Exposures'
 import { Fuse, fuseModel } from './Fuse'
 import { ProbeButton, probeCostText } from './ProbeButton'
 import { StatusPill } from './StatusPill'
@@ -332,6 +333,13 @@ export function DetailSheet({
                   </dl>
                 </section>
               )}
+
+              <ExposuresSection
+                credential={item.credential}
+                api={api}
+                now={now}
+                paused={deleting}
+              />
 
               {r.error && (
                 <section>

@@ -114,4 +114,57 @@ describe('web demo in-memory API', () => {
       RAW.listing.credentials.length,
     )
   })
+
+  const scanned = (api: ReturnType<typeof makeApi>) =>
+    new Promise<string[]>((resolve) => {
+      const events: string[] = []
+      const off = subscribe((type) => {
+        events.push(type)
+        if (type === 'scan_done') {
+          off()
+          resolve(events)
+        }
+      })
+      void api.scanStart()
+    })
+
+  it('scans a made-up home, imports a finding and shows where a stored key was', async () => {
+    const api = makeApi(null, clock().now)
+    expect((await api.scanState()).report).toBeNull()
+    const events = await scanned(api)
+    expect(events[0]).toBe('scan_started')
+    expect(events.filter((e) => e === 'scan_progress').length).toBeGreaterThan(1)
+    const report = (await api.scanState()).report
+    if (!report) throw new Error('no report')
+    expect(report.home).toBe('/home/demo')
+    expect(report.findings.every((f) => f.path.startsWith('/home/demo/'))).toBe(true)
+    const finding = report.findings.find((f) => f.importable)
+    if (!finding) throw new Error('nothing importable')
+    const { results } = await api.scanImport([finding.id, finding.id])
+    expect(results[0]?.ok).toBe(true)
+    expect(results[1]).toMatchObject({ ok: false, code: 'duplicate' })
+    const id = results[0]?.credential_id as string
+    expect((await api.list()).credentials.some((c) => c.credential.id === id)).toBe(true)
+    await expect(api.check(id)).resolves.toBeTruthy()
+    expect((await api.exposures(id)).exposures.map((e) => e.path)).toEqual([finding.path])
+
+    const stored = report.findings.find((f) => f.stored_id)?.stored_id as string
+    const where = await api.exposures(stored)
+    expect(where.exposures.length).toBeGreaterThan(0)
+    expect((await api.rescanExposures(stored)).exposures).toEqual(where.exposures)
+  }, 10_000)
+
+  it('stops a scan and forgets the result after 30 minutes', async () => {
+    const c = clock()
+    const api = makeApi(null, c.now)
+    const done = scanned(api)
+    expect((await api.scanStop()).stopping).toBe(true)
+    await done
+    expect((await api.scanState()).report).toBeNull()
+    await scanned(api)
+    const report = (await api.scanState()).report
+    const finding = report?.findings.find((f) => f.importable)
+    c.advance(31 * 60 * 1000)
+    await expect(api.scanImport([finding?.id as string])).rejects.toMatchObject({ status: 404 })
+  }, 10_000)
 })

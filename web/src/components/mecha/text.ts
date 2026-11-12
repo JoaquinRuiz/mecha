@@ -68,3 +68,30 @@ export function fundsInfoLine(i18n: I18n, item: CredentialStatus): string | null
     date: i18n.date(info.until),
   })
 }
+
+/** A path under the home folder as `~/…` (the server sends full paths, in bodies only). */
+export function shortPath(path: string, home: string): string {
+  const trimmed = home.replace(/[\\/]+$/, '')
+  if (trimmed && (path.startsWith(`${trimmed}/`) || path.startsWith(`${trimmed}\\`))) {
+    return `~${path.slice(trimmed.length)}`
+  }
+  return path
+}
+
+/** Where a key was found: `~/proj/.env:3`, or a notebook's cell and line. */
+export function whereText(
+  i18n: I18n,
+  at: { path: string; line: number; cell_line: number | null },
+  home: string,
+): string {
+  const path = shortPath(at.path, home)
+  if (at.cell_line !== null) {
+    return i18n.t('scanCell', { path, cell: at.line, line: at.cell_line })
+  }
+  return `${path}:${at.line}`
+}
+
+export function riskText(i18n: I18n, risk: string): string {
+  const key = `risk.${risk}`
+  return i18n.has(key) ? i18n.t(key as MessageKey) : risk
+}

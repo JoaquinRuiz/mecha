@@ -14,6 +14,7 @@ import socket
 import stat
 import subprocess
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
 import httpx
@@ -583,3 +584,235 @@ def test_permissions_helper_needs_every_folder_open(tmp_path: Path) -> None:
     finally:
         folder.chmod(0o755)
     assert stat.S_IMODE(os.stat(f).st_mode) & stat.S_IROTH
+
+
+# --- scanning single files again (the dashboard's "scan these files again") ---------------
+
+
+def test_a_single_file_inside_a_known_folder_is_read_as_what_it_is(
+    svc: MechaService, tree: Path
+) -> None:
+    home = tree / "home"
+    fish = home / ".local" / "share" / "fish"
+    fish.mkdir(parents=True)
+    (fish / "fish_history").write_text(f"- cmd: export K={ant()}\n  when: 1\n")
+    (home / "other.txt").write_text(f"{ant()}\n")
+    report = svc.scan(Options(roots=[fish / "fish_history"]), env=env(tree))
+    assert [f.location.path.name for f in report.findings] == ["fish_history"]
+    assert report.findings[0].risks == (Risk.shell_history,)
+
+
+def test_stop_cancels_between_files(svc: MechaService, tree: Path) -> None:
+    from mecha.scan.walk import ScanCancelled
+
+    for i in range(3):
+        (tree / "home" / f"{i}.txt").write_text("x\n")
+    seen: list[int] = []
+
+    def progress(n: int, _p: Path) -> None:
+        seen.append(n)
+
+    with pytest.raises(ScanCancelled):
+        svc.scan(Options(roots=[tree]), env=env(tree), progress=progress, stop=lambda: bool(seen))
+    assert seen == [1]
+
+
+# --- a scan only replaces the locations of files it read -----------------------------------
+
+
+def stored_in(svc: MechaService, cid: str) -> list[str]:
+    return sorted(Path(str(e["path"])).name for e in svc.exposures(cid))
+
+
+def test_protected_folder_not_scanned_this_time_keeps_its_location(
+    svc: MechaService, tree: Path
+) -> None:
+    home = tree / "home"
+    key = ant()
+    cid = svc.add(key).credential.id
+    proj = home / "Documents" / "proj"
+    proj.mkdir(parents=True)
+    (proj / ".env").write_text(f"ANTHROPIC_API_KEY={key}\n")
+    darwin = env(tree, "darwin")
+    svc.scan(Options(roots=[home], include_protected=True), env=darwin)
+    assert stored_in(svc, cid) == [".env"]
+    report = svc.scan(Options(roots=[home]), env=darwin)  # the dashboard's default
+    assert stored_in(svc, cid) == [".env"]
+    assert report.read == set(), "the lists of what was read are emptied after the cross-ref"
+    assert report.not_read == set()
+
+
+def test_cloud_only_and_unreadable_files_keep_their_location(
+    svc: MechaService, tree: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = tree / "home"
+    key = ant()
+    cid = svc.add(key).credential.id
+    (home / "a.env").write_text(f"ANTHROPIC_API_KEY={key}\n")
+    (home / "b.env").write_text(f"ANTHROPIC_API_KEY={key}\n")
+    svc.scan(Options(roots=[home]), env=env(tree))
+    assert stored_in(svc, cid) == ["a.env", "b.env"]
+
+    a = (home / "a.env").resolve()
+    b = (home / "b.env").resolve()
+    real_cloud, real_prefilter = fsio.cloud_only, fsio.prefilter
+    monkeypatch.setattr(fsio, "cloud_only", lambda st: st.st_ino == a.stat().st_ino)
+
+    def denied(path: Path) -> tuple[bool, bool]:
+        if Path(path).resolve() == b:
+            raise PermissionError("macOS said no")
+        return real_prefilter(path)
+
+    monkeypatch.setattr(fsio, "prefilter", denied)
+    svc.scan(Options(roots=[home]), env=env(tree))
+    assert stored_in(svc, cid) == ["a.env", "b.env"]
+    svc.rescan_exposures(cid, env=env(tree))  # "scan these files again", same files
+    assert stored_in(svc, cid) == ["a.env", "b.env"]
+
+    monkeypatch.setattr(fsio, "cloud_only", real_cloud)
+    monkeypatch.setattr(fsio, "prefilter", real_prefilter)
+    (home / "a.env").write_text("ANTHROPIC_API_KEY=\n")  # read, and the key is gone
+    svc.rescan_exposures(cid, env=env(tree))
+    assert stored_in(svc, cid) == ["b.env"]
+
+
+@pytest.mark.parametrize("how", ["full scan", "rescan"])
+def test_a_deleted_file_loses_its_location(svc: MechaService, tree: Path, how: str) -> None:
+    home = tree / "home"
+    key = ant()
+    cid = svc.add(key).credential.id
+    (home / "proj").mkdir()
+    (home / "proj" / ".env").write_text(f"ANTHROPIC_API_KEY={key}\n")
+    (home / ".zsh_history").write_text(f": 1:0;export ANTHROPIC_API_KEY={key}\n")
+    svc.scan(Options(roots=[home]), env=env(tree))
+    assert stored_in(svc, cid) == [".env", ".zsh_history"]
+    (home / "proj" / ".env").unlink()
+    if how == "rescan":
+        svc.rescan_exposures(cid, env=env(tree))
+    else:
+        svc.scan(Options(roots=[home]), env=env(tree))
+    assert stored_in(svc, cid) == [".zsh_history"]
+    assert svc.get(cid).credential.facts.exposure is not None
+
+
+def test_a_key_removed_from_a_config_inside_library_loses_its_location(
+    svc: MechaService, tree: Path
+) -> None:
+    """~/Library is excluded from the walk, but known configs inside it are read."""
+    home = tree / "home"
+    key = ant()
+    cid = svc.add(key).credential.id
+    config = home / "Library" / "Application Support" / "Claude" / "claude_desktop_config.json"
+    config.parent.mkdir(parents=True)
+    config.write_text(json.dumps({"mcpServers": {"x": {"env": {"ANTHROPIC_API_KEY": key}}}}))
+    darwin = env(tree, "darwin")
+    svc.scan(Options(roots=[home]), env=darwin)
+    assert stored_in(svc, cid) == ["claude_desktop_config.json"]
+    config.write_text(json.dumps({"mcpServers": {}}))
+    svc.scan(Options(roots=[home]), env=darwin)
+    assert stored_in(svc, cid) == []
+    assert svc.get(cid).credential.facts.exposure is None
+
+
+def cloud_folders(home: Path) -> tuple[Path, Path]:
+    icloud = home / "Library" / "Mobile Documents" / "com~apple~CloudDocs"
+    dropbox = home / "Library" / "CloudStorage" / "Dropbox"
+    for folder in (icloud, dropbox):
+        folder.mkdir(parents=True)
+    return icloud, dropbox
+
+
+def test_include_protected_scans_icloud_drive_and_cloud_storage(
+    svc: MechaService, tree: Path
+) -> None:
+    """Both sit inside ~/Library, which the walk skips: the flag walks them anyway."""
+    home = tree / "home"
+    icloud, dropbox = cloud_folders(home)
+    (icloud / "notes.env").write_text(f"ANTHROPIC_API_KEY={ant()}\n")
+    (dropbox / "keys.env").write_text(f"ANTHROPIC_API_KEY={ant()}\n")
+    darwin = env(tree, "darwin")
+
+    report = svc.scan(Options(roots=[home], include_protected=True), env=darwin)
+    assert sorted(f.location.path.name for f in report.findings) == ["keys.env", "notes.env"]
+    assert all(f.risks == (Risk.synced_folder,) and f.amber for f in report.findings)
+    assert report.roots == [home]
+
+    report = svc.scan(Options(roots=[home]), env=darwin)
+    assert report.findings == []
+    assert report.skipped.protected_dir == 2  # counted although the walk never got there
+
+
+def test_without_the_flag_protected_folders_keep_locations_without_a_stat_inside(
+    svc: MechaService, tree: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = tree / "home"
+    key = ant()
+    cid = svc.add(key).credential.id
+    icloud, dropbox = cloud_folders(home)
+    (home / "Documents").mkdir()
+    for folder in (icloud, dropbox, home / "Documents"):
+        (folder / "k.env").write_text(f"ANTHROPIC_API_KEY={key}\n")
+    darwin = env(tree, "darwin")
+    svc.scan(Options(roots=[home], include_protected=True), env=darwin)
+    assert len(svc.exposures(cid)) == 3
+
+    protected = [p.resolve() for p in places.protected_dirs(darwin)]
+    touched: list[str] = []
+
+    def guard(real: Callable[..., object]) -> Callable[..., object]:
+        def call(path: object, *args: object, **kwargs: object) -> object:
+            resolved = Path(os.path.abspath(os.fspath(path)))  # type: ignore[call-overload]
+            if any(p in resolved.parents for p in protected):
+                touched.append(str(resolved))
+                raise PermissionError("macOS would ask for permission here")
+            return real(path, *args, **kwargs)
+
+        return call
+
+    real = {name: getattr(os, name) for name in ("stat", "lstat", "scandir")}
+    for name, fn in real.items():
+        monkeypatch.setattr(os, name, guard(fn))
+    report = svc.scan(Options(roots=[home]), env=darwin)  # the dashboard's default
+    for name, fn in real.items():
+        monkeypatch.setattr(os, name, fn)
+    assert touched == [], "looked inside a protected folder without the flag"
+    assert report.skipped.protected_dir == 3
+    assert len(svc.exposures(cid)) == 3, "locations in protected folders are kept"
+
+
+# --- importing ---------------------------------------------------------------------------
+
+
+def test_import_rereads_with_the_scan_checks_and_stops_past_the_line(
+    svc: MechaService, tree: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = tree / "home"
+    (home / "a.env").write_text(f"ANTHROPIC_API_KEY={ant()}\n" + "x=1\n" * 50)
+    report = svc.scan(Options(roots=[home]), env=env(tree))
+    fid = report.findings[0].location.id
+    monkeypatch.setattr(fsio, "cloud_only", lambda st: True)  # went to iCloud meanwhile
+    opened: list[Path] = []
+    real_open = fsio.open_binary
+
+    def spy(path: Path):  # type: ignore[no-untyped-def]
+        opened.append(Path(path))
+        return real_open(path)
+
+    monkeypatch.setattr(fsio, "open_binary", spy)
+    assert svc.import_found(report, [fid]) == [{"id": fid, "ok": False, "code": "not_readable"}]
+    assert opened == [], "a cloud-only file is never opened (it would be downloaded)"
+
+    monkeypatch.undo()
+    from mecha.scan import walk
+
+    consumed: list[int] = []
+    real_lines = walk.fsio.lines
+
+    def counting(path: Path, kind: object):  # type: ignore[no-untyped-def]
+        for item in real_lines(path, kind):  # type: ignore[arg-type]
+            consumed.append(item[0])
+            yield item
+
+    monkeypatch.setattr(walk.fsio, "lines", counting)
+    assert walk.read_token(report.findings[0].location) is not None
+    assert consumed == [1]

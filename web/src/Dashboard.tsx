@@ -22,6 +22,7 @@ import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { useI18n, useSetLang } from '@/i18n'
 import { makeApi } from '@/lib/api'
 import { connectEvents } from '@/lib/events'
+import { SCAN_KEY, SCAN_PROGRESS_KEY, type ScanProgress } from '@/lib/scan'
 import { type EventPosition, missedEvents } from '@/lib/sync'
 import { type CredentialStatus, DEFAULT_SETTINGS, OVERALL_ORDER, type Overall } from '@/lib/types'
 
@@ -138,12 +139,34 @@ export function Dashboard({ token }: { token: string }) {
           syncIfMissed()
           return
         }
+        if (type.startsWith('scan_')) {
+          // Progress arrives up to 4 times a second: it updates the scan tab only, never
+          // the listing (a scan that changes stored keys sends credentials_changed).
+          const s = (data ?? {}) as { files?: number; cancelled?: boolean; failed?: boolean }
+          const outcome =
+            type === 'scan_done'
+              ? s.cancelled
+                ? 'cancelled'
+                : s.failed
+                  ? 'failed'
+                  : 'done'
+              : 'running'
+          qc.setQueryData<ScanProgress>(SCAN_PROGRESS_KEY, (old) => ({
+            files: s.files ?? old?.files ?? 0,
+            outcome,
+          }))
+          if (type !== 'scan_progress') void qc.invalidateQueries({ queryKey: SCAN_KEY })
+          return
+        }
         const d = (data ?? {}) as { done?: number; total?: number }
         if (type === 'check_all_started') setProgress({ done: 0, total: d.total ?? 0 })
         if (type === 'check_progress') setProgress({ done: d.done ?? 0, total: d.total ?? 0 })
         if (type === 'check_all_done') setProgress(null)
         void qc.invalidateQueries({ queryKey: ['credentials'] })
-        if (type !== 'check_progress') void qc.invalidateQueries({ queryKey: ['history'] })
+        if (type !== 'check_progress') {
+          void qc.invalidateQueries({ queryKey: ['history'] })
+          void qc.invalidateQueries({ queryKey: ['exposures'] })
+        }
       },
     })
     return () => controller.abort()
@@ -487,6 +510,10 @@ export function Dashboard({ token }: { token: string }) {
             api={api}
             providers={providerList}
             demo={!!data?.demo}
+            onOpenCredential={(cid) => {
+              setAddOpen(false)
+              setSelected(cid)
+            }}
           />
         )}
         {paletteOpen && (

@@ -11,9 +11,11 @@ import asyncio
 import contextlib
 import json
 import logging
+import threading
+import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import Annotated, Any, Literal
 
@@ -33,15 +35,20 @@ from mecha.core.errors import (
 from mecha.core.events import EventBus
 from mecha.core.models import Budget, CredentialKind, ProviderId
 from mecha.core.serialize import SCHEMA_VERSION, status_json
-from mecha.core.service import CredentialStatus, MechaService
+from mecha.core.service import CredentialStatus, MechaService, finding_json
 from mecha.linked import TOOLS, LinkedFileError, default_path
 from mecha.providers import ENABLED
+from mecha.scan.model import ScanReport
+from mecha.scan.walk import Options as ScanOptions
+from mecha.scan.walk import ScanCancelled
 
 log = logging.getLogger(__name__)
 router = APIRouter()
 
 MAX_SECRET = 8192  # longer than any real key or JWT; bigger bodies are rejected unread
 KEEPALIVE_SECONDS = 15.0
+SCAN_TTL_SECONDS = 30 * 60  # the last scan's report is a map of your keys: not kept longer
+SCAN_PROGRESS_SECONDS = 0.25  # a home folder is read at thousands of files per second
 
 
 @dataclass
@@ -50,6 +57,34 @@ class ApiContext:
     bus: EventBus = field(default_factory=EventBus)
     demo: bool = False
     check_all_task: asyncio.Task[None] | None = None
+    # mecha scan from the dashboard. Only the last report, in memory, for SCAN_TTL_SECONDS.
+    scan_task: asyncio.Task[None] | None = None
+    scan_stop: threading.Event = field(default_factory=threading.Event)
+    scan_busy: bool = False  # a scan or a rescan is running
+    scan_report: ScanReport | None = None
+    scan_finished_at: datetime | None = None
+    scan_expires: float = 0.0  # time.monotonic() deadline
+    scan_timer: asyncio.TimerHandle | None = None
+
+    def last_scan(self) -> ScanReport | None:
+        if self.scan_report is not None and time.monotonic() >= self.scan_expires:
+            self.forget_scan()
+        return self.scan_report
+
+    def keep_scan(self, report: ScanReport) -> None:
+        self.forget_scan()
+        self.scan_report = report
+        self.scan_finished_at = report.scanned_at or self.service.now()
+        self.scan_expires = time.monotonic() + SCAN_TTL_SECONDS
+        # Dropped on time even if nobody asks for it again.
+        self.scan_timer = asyncio.get_running_loop().call_later(SCAN_TTL_SECONDS, self.forget_scan)
+
+    def forget_scan(self) -> None:
+        self.scan_report = None
+        self.scan_finished_at = None
+        if self.scan_timer is not None:
+            self.scan_timer.cancel()
+            self.scan_timer = None
 
 
 def _ctx(request: Request) -> ApiContext:
@@ -102,6 +137,18 @@ class LinkIn(Strict):
 
 class EnvIn(Strict):
     content: str = Field(min_length=1, max_length=60_000)
+
+
+class ScanIn(Strict):
+    """Only the home folder can be scanned from the browser: no paths come from it."""
+
+    include_protected: bool = False
+
+
+class ScanImportIn(Strict):
+    ids: list[Annotated[str, Field(min_length=1, max_length=64)]] = Field(
+        min_length=1, max_length=500
+    )
 
 
 class EnvImportIn(EnvIn):
@@ -320,6 +367,160 @@ async def import_env(request: Request, body: EnvImportIn) -> dict[str, Any]:
     return {"results": results}
 
 
+# --- mecha scan --------------------------------------------------------------------------
+# Paths only travel in response bodies, never in a URL (URLs end up in the access log) nor
+# in events. The file reading runs in a worker thread; everything that touches SQLite or
+# the event bus runs on the event loop.
+
+
+def _scan_busy() -> JSONResponse:
+    return JSONResponse(
+        {"code": "scan_running", "message": "A scan is already running."}, status_code=409
+    )
+
+
+def _scan_json(ctx: ApiContext, report: ScanReport) -> dict[str, Any]:
+    finished = ctx.scan_finished_at
+    return {
+        "home": str(ctx.service.scan_home()),
+        "roots": [str(r) for r in report.roots],
+        "store_checked": report.store_checked,
+        "warnings": report.warnings,
+        "files_scanned": report.files_scanned,
+        "skipped": vars(report.skipped),
+        "finished_at": finished.isoformat() if finished else None,
+        "expires_at": (
+            (finished + timedelta(seconds=SCAN_TTL_SECONDS)).isoformat() if finished else None
+        ),
+        "findings": [finding_json(f) for f in report.findings],
+    }
+
+
+@router.post("/scan", status_code=202)
+async def start_scan(request: Request, body: ScanIn) -> Any:
+    """Scan the home folder for plaintext keys (offline). Progress on ``/api/events``:
+    ``scan_started``, ``scan_progress`` (a file count, at most every 250 ms), ``scan_done``."""
+    ctx = _ctx(request)
+    if ctx.scan_busy:
+        return _scan_busy()
+    service = ctx.service
+    loop = asyncio.get_running_loop()
+    options = ScanOptions(include_protected=body.include_protected)
+    stop = ctx.scan_stop = threading.Event()
+    last = 0.0
+
+    def progress(files: int, _path: object) -> None:  # worker thread: hand over to the loop
+        nonlocal last
+        now = time.monotonic()
+        if now - last >= SCAN_PROGRESS_SECONDS:
+            last = now
+            loop.call_soon_threadsafe(ctx.bus.publish, {"type": "scan_progress", "files": files})
+
+    async def run() -> None:
+        done: dict[str, Any] = {"type": "scan_done", "cancelled": False, "failed": False}
+        try:
+            store = service.scan_store()
+            report = await asyncio.to_thread(
+                service.read_files, options, store, None, progress, stop.is_set
+            )
+            report = service.cross_reference(report, store)  # back on the loop: SQLite
+            ctx.keep_scan(report)
+            done |= {"files": report.files_scanned, "findings": len(report.findings)}
+            _changed(ctx)  # stored keys may have turned amber (or back)
+        except ScanCancelled:
+            done["cancelled"] = True
+        except Exception:  # never let a background task die silently
+            log.exception("scan failed")
+            done["failed"] = True
+        finally:
+            ctx.scan_busy = False
+            ctx.bus.publish(done)
+
+    ctx.forget_scan()
+    ctx.scan_busy = True
+    ctx.bus.publish({"type": "scan_started"})
+    ctx.scan_task = asyncio.create_task(run())
+    return {"started": True}
+
+
+@router.post("/scan/stop", status_code=202)
+async def stop_scan(request: Request) -> dict[str, Any]:
+    """Stop the running scan between two files. A stopped scan keeps no report."""
+    ctx = _ctx(request)
+    running = ctx.scan_busy and ctx.scan_task is not None and not ctx.scan_task.done()
+    if running:
+        ctx.scan_stop.set()
+    return {"stopping": running}
+
+
+@router.get("/scan")
+async def last_scan(request: Request) -> dict[str, Any]:
+    """The last scan's report (redacted), while it is kept, and whether one is running."""
+    ctx = _ctx(request)
+    report = ctx.last_scan()
+    return {
+        "running": ctx.scan_busy,
+        "protected_option": ctx.service.scan_has_protected(),
+        "report": _scan_json(ctx, report) if report is not None else None,
+    }
+
+
+@router.post("/scan/import")
+async def scan_import(request: Request, body: ScanImportIn) -> dict[str, Any]:
+    """Import chosen findings: each key is read again from its file (never kept in between)."""
+    ctx = _ctx(request)
+    report = ctx.last_scan()
+    if report is None:
+        raise NotFoundError("No scan to import from (it is kept for 30 minutes).")
+    service = ctx.service
+    store = service.store  # opened here, on the loop
+    # Reading the files again may be slow (or hit a file that just went cloud-only): in a
+    # worker thread, with the scan's checks. Adding them touches SQLite: back on the loop.
+    secrets = await asyncio.to_thread(service.read_found, report, body.ids, store)
+    results = service.add_found(report, body.ids, secrets)
+    if any(r["ok"] for r in results):
+        _changed(ctx)
+    return {"results": results}
+
+
+def _exposures_json(ctx: ApiContext, cred_id: str) -> dict[str, Any]:
+    item = ctx.service.get(cred_id)
+    summary = item.credential.facts.exposure
+    return {
+        "home": str(ctx.service.scan_home()),
+        "scanned_at": summary.scanned_at.isoformat() if summary else None,
+        "exposures": ctx.service.exposures(item.credential.id),
+    }
+
+
+@router.get("/credentials/{cred_id}/exposures")
+async def exposures(request: Request, cred_id: str) -> dict[str, Any]:
+    """Where a stored key was found in plaintext (kept encrypted, decrypted for this)."""
+    return _exposures_json(_ctx(request), cred_id)
+
+
+@router.post("/credentials/{cred_id}/exposures/rescan")
+async def rescan_exposures(request: Request, cred_id: str) -> Any:
+    """Scan again only the files this key was found in: their paths come from the stored
+    locations, never from the request."""
+    ctx = _ctx(request)
+    if ctx.scan_busy:
+        return _scan_busy()
+    service = ctx.service
+    cred = service.get(cred_id).credential
+    paths = service.exposure_paths(cred.id)
+    if paths:
+        ctx.scan_busy = True
+        try:
+            store = service.scan_store()
+            report = await asyncio.to_thread(service.read_files, ScanOptions(roots=paths), store)
+            service.cross_reference(report, store)
+        finally:
+            ctx.scan_busy = False
+        _changed(ctx, cred.id)
+    return _exposures_json(ctx, cred.id)
+
+
 @router.get("/providers")
 async def providers(request: Request) -> dict[str, Any]:
     """Capability matrix, limited to what is implemented (no promises), with the estimated
@@ -394,3 +595,9 @@ async def cancel_background(ctx: ApiContext) -> None:
         task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await task
+    scan = ctx.scan_task
+    if scan is not None and not scan.done():
+        ctx.scan_stop.set()  # the worker thread stops at the next file
+        with contextlib.suppress(asyncio.CancelledError):
+            await scan
+    ctx.forget_scan()

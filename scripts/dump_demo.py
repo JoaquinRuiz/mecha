@@ -82,17 +82,21 @@ def build() -> dict[str, Any]:
     warnings.filterwarnings("ignore", message="Using `httpx` with `starlette.testclient`")
     from fastapi.testclient import TestClient
 
+    import mecha.core.demo as demo_module
     import mecha.core.service as service_module
     from mecha.api.routes import ApiContext
     from mecha.core.demo import DemoService
     from mecha.server import create_app
 
-    # Deterministic ids for the credentials that "Add" creates.
+    # Deterministic ids for the credentials that "Add" (or a scan's import) creates.
     ids = count(1)
     service_module.new_ulid = lambda: f"01WEBDEMO{next(ids):017d}"  # type: ignore[attr-defined]
+    demo_module.new_ulid = service_module.new_ulid  # type: ignore[attr-defined]
 
     def client() -> TestClient:
-        app = create_app(token=TOKEN, port=7878, api=ApiContext(service=DemoService(), demo=True))
+        service = DemoService()
+        service.scan_seconds = 0  # the web demo animates the progress itself
+        app = create_app(token=TOKEN, port=7878, api=ApiContext(service=service, demo=True))
         return TestClient(
             app, base_url="http://127.0.0.1:7878", headers={"Authorization": f"Bearer {TOKEN}"}
         )
@@ -154,8 +158,47 @@ def build() -> dict[str, Any]:
                 }
             )
 
+    # mecha scan: the demo's fixed result, what importing each finding adds, and where
+    # the stored keys were found. Paths are the demo's made-up home, never this machine's.
+    with client() as c:
+        c.post("/api/scan", json={})
+        for _ in range(500):
+            scan = c.get("/api/scan").json()
+            if not scan["running"]:
+                break
+        if scan["report"] is None:
+            raise SystemExit("error: the demo scan did not finish")
+        exposures = {
+            item["credential"]["id"]: c.get(
+                f"/api/credentials/{item['credential']['id']}/exposures"
+            ).json()
+            for item in listing["credentials"]
+            if (item["credential"].get("facts") or {}).get("exposure")
+        }
+        imports = {}
+        for finding in scan["report"]["findings"]:
+            if not finding["importable"]:
+                continue
+            result = c.post("/api/scan/import", json={"ids": [finding["id"]]}).json()["results"][0]
+            added = next(
+                item
+                for item in c.get("/api/credentials").json()["credentials"]
+                if item["credential"]["id"] == result["credential_id"]
+            )
+            cid = result["credential_id"]
+            imports[finding["id"]] = {
+                "result": result,
+                "added": added,
+                "check": _answer(c.post(f"/api/credentials/{cid}/check?force=true")),
+                "probe": _answer(c.post(f"/api/credentials/{cid}/check?mode=active&force=true")),
+                "exposures": c.get(f"/api/credentials/{cid}/exposures").json(),
+            }
+
     return {
         "generated_at": listing["generated_at"],
+        "scan": scan,
+        "scan_imports": imports,
+        "exposures": exposures,
         "listing": listing,
         "providers": providers,
         "history": history,

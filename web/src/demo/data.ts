@@ -1,4 +1,13 @@
-import type { CheckResult, CredentialStatus, Kind, Listing, ProviderInfo } from '@/lib/types'
+import type {
+  CheckResult,
+  CredentialStatus,
+  Exposures,
+  Kind,
+  Listing,
+  ProviderInfo,
+  ScanImportResult,
+  ScanState,
+} from '@/lib/types'
 import raw from './data.json'
 import { offsetFor, shiftDates } from './dates'
 
@@ -19,8 +28,22 @@ export interface Sample {
   probe: Answer
 }
 
+/** What importing one finding of the demo's scan adds (and how its checks answer). */
+export interface ScanImport {
+  result: ScanImportResult
+  added: CredentialStatus
+  check: Answer
+  probe: Answer
+  /** Where it was found: importing keeps the scan's locations. */
+  exposures: Exposures
+}
+
 export interface DemoData {
   generated_at: string
+  /** The demo's fixed scan of a made-up home folder (never this machine's). */
+  scan: ScanState
+  scan_imports: Record<string, ScanImport>
+  exposures: Record<string, Exposures>
   listing: Listing
   providers: { providers: ProviderInfo[] }
   history: Record<string, CheckResult[]>

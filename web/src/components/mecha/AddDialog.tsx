@@ -18,6 +18,7 @@ import { SamplePicker } from '@/lib/edition'
 import { ApiError } from '@/lib/errors'
 import type { Detection, Kind, ProviderInfo } from '@/lib/types'
 import { EnvImportPanel, LinkPanel } from './ImportPanels'
+import { ScanPanel } from './ScanPanel'
 import { useToast } from './Toaster'
 import { providerName } from './text'
 
@@ -35,12 +36,15 @@ export function AddDialog({
   api,
   providers,
   demo,
+  onOpenCredential,
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
   api: Api
   providers: ProviderInfo[]
   demo: boolean
+  /** Close this dialog and open a stored credential's sheet (from a scan finding). */
+  onOpenCredential?: (id: string) => void
 }) {
   const { t } = useI18n()
   const toast = useToast()
@@ -131,15 +135,31 @@ export function AddDialog({
   if (SamplePicker) {
     return (
       <Dialog open={open} onOpenChange={onOpenChange}>
-        <DialogContent data-testid="add-dialog">
+        <DialogContent data-testid="add-dialog" className="max-h-[90dvh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>{t('addTitle')}</DialogTitle>
             <DialogDescription>{t('staticBanner')}</DialogDescription>
           </DialogHeader>
-          <SamplePicker
-            pending={pick.isPending}
-            onPick={(value, sampleLabel) => pick.mutate({ value, label: sampleLabel })}
-          />
+          {/* No field to paste anything: sample keys, and the demo's recorded scan. */}
+          <Tabs defaultValue="samples">
+            <TabsList>
+              <TabsTrigger value="samples">{t('tabSamples')}</TabsTrigger>
+              <TabsTrigger value="scan">{t('tabScan')}</TabsTrigger>
+            </TabsList>
+            <TabsContent value="samples">
+              <SamplePicker
+                pending={pick.isPending}
+                onPick={(value, sampleLabel) => pick.mutate({ value, label: sampleLabel })}
+              />
+            </TabsContent>
+            <TabsContent value="scan">
+              <ScanPanel
+                api={api}
+                onDone={() => onOpenChange(false)}
+                onOpenCredential={onOpenCredential}
+              />
+            </TabsContent>
+          </Tabs>
         </DialogContent>
       </Dialog>
     )
@@ -147,7 +167,7 @@ export function AddDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent data-testid="add-dialog">
+      <DialogContent data-testid="add-dialog" className="max-h-[90dvh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>{t('addTitle')}</DialogTitle>
           <DialogDescription>
@@ -164,6 +184,7 @@ export function AddDialog({
             <TabsTrigger value="secret">{t('tabSecret')}</TabsTrigger>
             <TabsTrigger value="env">{t('tabEnv')}</TabsTrigger>
             <TabsTrigger value="link">{t('tabLink')}</TabsTrigger>
+            <TabsTrigger value="scan">{t('tabScan')}</TabsTrigger>
           </TabsList>
           <TabsContent value="secret" className="space-y-3">
             <form
@@ -303,6 +324,13 @@ export function AddDialog({
           </TabsContent>
           <TabsContent value="env">
             <EnvImportPanel api={api} onDone={() => onOpenChange(false)} />
+          </TabsContent>
+          <TabsContent value="scan">
+            <ScanPanel
+              api={api}
+              onDone={() => onOpenChange(false)}
+              onOpenCredential={onOpenCredential}
+            />
           </TabsContent>
           <TabsContent value="link">
             <LinkPanel api={api} onDone={() => onOpenChange(false)} />

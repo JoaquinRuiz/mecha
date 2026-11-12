@@ -83,7 +83,8 @@ test('"Add" offers sample keys only: no field to paste a key', async ({ page }) 
   await expect(dialog.getByTestId('sample-picker')).toBeVisible()
   await expect(dialog.getByRole('textbox')).toHaveCount(0)
   await expect(dialog.locator('textarea, input')).toHaveCount(0)
-  await expect(dialog.getByRole('tab')).toHaveCount(0) // no .env import, no linking
+  // No .env import, no linking: sample keys and the demo's recorded scan only.
+  await expect(dialog.getByRole('tab')).toHaveCount(2)
   await dialog.getByRole('button', { name: /OpenRouter/ }).click()
   await expect(dialog).toBeHidden()
   await expect(page.locator('[data-testid="credential-card"]')).toHaveCount(before + 1)
@@ -158,3 +159,37 @@ for (const theme of ['dark', 'light'] as const) {
     expect(results.violations.map((v) => `${v.id}: ${v.help}`)).toEqual([])
   })
 }
+
+test('scan tab replays the demo result of a made-up home; sheet shows where', async ({ page }) => {
+  const { problems } = await guard(page)
+  await open(page)
+  await page
+    .getByRole('button', { name: /Add credential|Añadir credencial/ })
+    .first()
+    .click()
+  const dialog = page.getByTestId('add-dialog')
+  await dialog.getByRole('tab', { name: /^Scan$|^Escanear$/ }).click()
+  const panel = dialog.getByTestId('scan-panel')
+  await panel.getByRole('button', { name: /Scan my home folder|Escanear mi carpeta/ }).click()
+  await expect(panel.getByRole('button', { name: /^Stop$|^Detener$/ })).toBeVisible()
+  const report = panel.getByTestId('scan-report')
+  await expect(report).toBeVisible({ timeout: 10_000 })
+  await expect(report).toContainText('~/.zsh_history:1042')
+  // Still nothing to paste a key into, with the scan's results on screen.
+  await expect(dialog.getByRole('textbox')).toHaveCount(0)
+  await expect(dialog.locator('textarea, input:not([type="checkbox"])')).toHaveCount(0)
+  await report.getByRole('checkbox', { name: /projects\/chatbot\/\.env/ }).check()
+  await report.getByRole('button', { name: /Import 1|Importar 1/ }).click()
+  await expect(dialog).toBeHidden()
+  await page.getByRole('button', { name: 'OPENAI_API_KEY', exact: true }).click()
+  // Imported with where it was found.
+  await expect(page.getByTestId('exposures')).toContainText('~/projects/chatbot/.env:3')
+  await page.keyboard.press('Escape')
+
+  await page.getByRole('button', { name: 'Demo day key', exact: true }).click()
+  const where = page.getByTestId('exposures')
+  await expect(where).toContainText('~/projects/workshop/.env:1')
+  await where.getByRole('button', { name: /Scan these files again|Volver a escanear/ }).click()
+  await expect(where).toContainText('~/.zsh_history:1042')
+  expect(problems).toEqual([])
+})

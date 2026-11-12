@@ -4,6 +4,33 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- Scan from the dashboard: a «Scan» tab in the add dialog scans your home folder (offline,
+  in the background, with a Stop button), lists what it found redacted and imports the
+  keys you choose. The report stays in the server's memory for 30 minutes at most.
+- The detail sheet of a stored key says where `mecha scan` found it in plaintext, and can
+  scan just those files again after you clean them up. `mecha where <id> [--rescan]` does
+  the same from the CLI.
+- `mecha serve --demo` scans a made-up home folder instead of your disk, and the web
+  demo replays that scan.
+
+### Fixed
+
+- A scan no longer drops the stored locations of files it did not read: a protected
+  folder scanned only the time before, a file now only in the cloud, or one it could not
+  read keep their locations. A deleted file still loses them.
+- `mecha scan --import` keeps where the key was found (it no longer waits for the next
+  scan), and the same key found in two files is imported once instead of failing as a
+  duplicate. Import also checks again that the file is not cloud-only or too large.
+- macOS: `--include-protected` and the dashboard's checkbox now really scan iCloud Drive
+  and `~/Library/CloudStorage` (Dropbox, Google Drive, OneDrive). Both sit inside
+  `~/Library`, which the walk skips, so they were never reached. Without the flag they
+  count as skipped protected folders, and a location stored there is kept without
+  looking inside.
+
 ## [0.2.0] - 2026-11-09
 
 ### Added
