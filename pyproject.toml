@@ -1,6 +1,6 @@
 [project]
 name = "mecha-keys"
-version = "0.2.0"
+version = "0.3.0"
 description = "Local dashboard that tells you how much life is left on your AI API keys."
 readme = "README.md"
 license = "MIT"
