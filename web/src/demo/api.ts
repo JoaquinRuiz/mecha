@@ -276,7 +276,10 @@ export function makeApi(_token: string | null, now: () => number = Date.now): Ap
     exposures: async (id: string) => {
       get(id)
       const home = state.data.scan.report?.home ?? ''
-      return clone(state.data.exposures[id] ?? { home, scanned_at: null, exposures: [] })
+      return clone(
+        state.data.exposures[id] ??
+          state.importedOf.get(id)?.exposures ?? { home, scanned_at: null, exposures: [] },
+      )
     },
 
     // The made-up files never change: scanning them again finds the same.
@@ -284,7 +287,10 @@ export function makeApi(_token: string | null, now: () => number = Date.now): Ap
       get(id)
       await new Promise((r) => setTimeout(r, 300))
       const home = state.data.scan.report?.home ?? ''
-      return clone(state.data.exposures[id] ?? { home, scanned_at: null, exposures: [] })
+      return clone(
+        state.data.exposures[id] ??
+          state.importedOf.get(id)?.exposures ?? { home, scanned_at: null, exposures: [] },
+      )
     },
   }
 }

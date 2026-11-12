@@ -394,6 +394,7 @@ test('scan tab: progress, Stop, redacted findings, import; no path ever in a URL
   await expect(dialog).toBeHidden()
   const sheet = page.getByTestId('detail-sheet')
   await expect(sheet).toContainText('OPENAI_API_KEY')
+  await expect(sheet.getByTestId('exposures')).toContainText('~/projects/chatbot/.env:3')
   await sheet.getByRole('button', { name: /^Delete$|^Borrar$/ }).click()
   await page
     .getByTestId('delete-dialog')

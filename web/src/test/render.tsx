@@ -11,9 +11,9 @@ export function renderUi(
   {
     lang = 'en',
     reducedMotion = 'never',
-  }: { lang?: Lang; reducedMotion?: 'always' | 'never' } = {},
+    client = new QueryClient({ defaultOptions: { queries: { retry: false } } }),
+  }: { lang?: Lang; reducedMotion?: 'always' | 'never'; client?: QueryClient } = {},
 ) {
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   return render(
     <MotionConfig reducedMotion={reducedMotion}>
       <QueryClientProvider client={client}>

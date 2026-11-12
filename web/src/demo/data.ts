@@ -34,6 +34,8 @@ export interface ScanImport {
   added: CredentialStatus
   check: Answer
   probe: Answer
+  /** Where it was found: importing keeps the scan's locations. */
+  exposures: Exposures
 }
 
 export interface DemoData {

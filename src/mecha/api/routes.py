@@ -14,7 +14,7 @@ import logging
 import threading
 import time
 from collections.abc import AsyncIterator
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import Annotated, Any, Literal
@@ -74,7 +74,7 @@ class ApiContext:
     def keep_scan(self, report: ScanReport) -> None:
         self.forget_scan()
         self.scan_report = report
-        self.scan_finished_at = self.service.now()
+        self.scan_finished_at = report.scanned_at or self.service.now()
         self.scan_expires = time.monotonic() + SCAN_TTL_SECONDS
         # Dropped on time even if nobody asks for it again.
         self.scan_timer = asyncio.get_running_loop().call_later(SCAN_TTL_SECONDS, self.forget_scan)
@@ -472,13 +472,13 @@ async def scan_import(request: Request, body: ScanImportIn) -> dict[str, Any]:
     report = ctx.last_scan()
     if report is None:
         raise NotFoundError("No scan to import from (it is kept for 30 minutes).")
-    results = ctx.service.import_found(report, body.ids)
-    imported = {str(r["id"]): str(r["credential_id"]) for r in results if r["ok"]}
-    if imported:
-        report.findings = [
-            replace(f, stored_id=imported[f.location.id]) if f.location.id in imported else f
-            for f in report.findings
-        ]
+    service = ctx.service
+    store = service.store  # opened here, on the loop
+    # Reading the files again may be slow (or hit a file that just went cloud-only): in a
+    # worker thread, with the scan's checks. Adding them touches SQLite: back on the loop.
+    secrets = await asyncio.to_thread(service.read_found, report, body.ids, store)
+    results = service.add_found(report, body.ids, secrets)
+    if any(r["ok"] for r in results):
         _changed(ctx)
     return {"results": results}
 

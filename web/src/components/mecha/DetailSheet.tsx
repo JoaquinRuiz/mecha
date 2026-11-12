@@ -334,7 +334,12 @@ export function DetailSheet({
                 </section>
               )}
 
-              <ExposuresSection credential={item.credential} api={api} now={now} />
+              <ExposuresSection
+                credential={item.credential}
+                api={api}
+                now={now}
+                paused={deleting}
+              />
 
               {r.error && (
                 <section>

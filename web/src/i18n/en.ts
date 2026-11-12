@@ -251,6 +251,7 @@ export const en = {
   scanCell: '{path} (cell {cell}, line {line})',
   'scanCode.changed': 'the file changed since the scan',
   'scanCode.duplicate': 'already stored',
+  'scanCode.not_readable': 'the file cannot be read now (cloud-only, too large or no permission)',
   'scanCode.not_found': 'not in the last scan',
   'scanCode.not_storable': 'never stored (refresh token)',
   'scanCode.session_file': 'a session file: link it instead',

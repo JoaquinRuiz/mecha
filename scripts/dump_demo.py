@@ -191,6 +191,7 @@ def build() -> dict[str, Any]:
                 "added": added,
                 "check": _answer(c.post(f"/api/credentials/{cid}/check?force=true")),
                 "probe": _answer(c.post(f"/api/credentials/{cid}/check?mode=active&force=true")),
+                "exposures": c.get(f"/api/credentials/{cid}/exposures").json(),
             }
 
     return {

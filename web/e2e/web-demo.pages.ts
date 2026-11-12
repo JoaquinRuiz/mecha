@@ -175,11 +175,15 @@ test('scan tab replays the demo result of a made-up home; sheet shows where', as
   const report = panel.getByTestId('scan-report')
   await expect(report).toBeVisible({ timeout: 10_000 })
   await expect(report).toContainText('~/.zsh_history:1042')
+  // Still nothing to paste a key into, with the scan's results on screen.
+  await expect(dialog.getByRole('textbox')).toHaveCount(0)
+  await expect(dialog.locator('textarea, input:not([type="checkbox"])')).toHaveCount(0)
   await report.getByRole('checkbox', { name: /projects\/chatbot\/\.env/ }).check()
   await report.getByRole('button', { name: /Import 1|Importar 1/ }).click()
   await expect(dialog).toBeHidden()
   await page.getByRole('button', { name: 'OPENAI_API_KEY', exact: true }).click()
-  await expect(page.getByTestId('detail-sheet')).toBeVisible()
+  // Imported with where it was found.
+  await expect(page.getByTestId('exposures')).toContainText('~/projects/chatbot/.env:3')
   await page.keyboard.press('Escape')
 
   await page.getByRole('button', { name: 'Demo day key', exact: true }).click()

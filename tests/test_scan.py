@@ -614,3 +614,138 @@ def test_stop_cancels_between_files(svc: MechaService, tree: Path) -> None:
     with pytest.raises(ScanCancelled):
         svc.scan(Options(roots=[tree]), env=env(tree), progress=progress, stop=lambda: bool(seen))
     assert seen == [1]
+
+
+# --- a scan only replaces the locations of files it read -----------------------------------
+
+
+def stored_in(svc: MechaService, cid: str) -> list[str]:
+    return sorted(Path(str(e["path"])).name for e in svc.exposures(cid))
+
+
+def test_protected_folder_not_scanned_this_time_keeps_its_location(
+    svc: MechaService, tree: Path
+) -> None:
+    home = tree / "home"
+    key = ant()
+    cid = svc.add(key).credential.id
+    proj = home / "Documents" / "proj"
+    proj.mkdir(parents=True)
+    (proj / ".env").write_text(f"ANTHROPIC_API_KEY={key}\n")
+    darwin = env(tree, "darwin")
+    svc.scan(Options(roots=[home], include_protected=True), env=darwin)
+    assert stored_in(svc, cid) == [".env"]
+    report = svc.scan(Options(roots=[home]), env=darwin)  # the dashboard's default
+    assert stored_in(svc, cid) == [".env"]
+    assert report.read == set(), "the lists of what was read are emptied after the cross-ref"
+    assert report.not_read == set()
+
+
+def test_cloud_only_and_unreadable_files_keep_their_location(
+    svc: MechaService, tree: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = tree / "home"
+    key = ant()
+    cid = svc.add(key).credential.id
+    (home / "a.env").write_text(f"ANTHROPIC_API_KEY={key}\n")
+    (home / "b.env").write_text(f"ANTHROPIC_API_KEY={key}\n")
+    svc.scan(Options(roots=[home]), env=env(tree))
+    assert stored_in(svc, cid) == ["a.env", "b.env"]
+
+    a = (home / "a.env").resolve()
+    b = (home / "b.env").resolve()
+    real_cloud, real_prefilter = fsio.cloud_only, fsio.prefilter
+    monkeypatch.setattr(fsio, "cloud_only", lambda st: st.st_ino == a.stat().st_ino)
+
+    def denied(path: Path) -> tuple[bool, bool]:
+        if Path(path).resolve() == b:
+            raise PermissionError("macOS said no")
+        return real_prefilter(path)
+
+    monkeypatch.setattr(fsio, "prefilter", denied)
+    svc.scan(Options(roots=[home]), env=env(tree))
+    assert stored_in(svc, cid) == ["a.env", "b.env"]
+    svc.rescan_exposures(cid, env=env(tree))  # "scan these files again", same files
+    assert stored_in(svc, cid) == ["a.env", "b.env"]
+
+    monkeypatch.setattr(fsio, "cloud_only", real_cloud)
+    monkeypatch.setattr(fsio, "prefilter", real_prefilter)
+    (home / "a.env").write_text("ANTHROPIC_API_KEY=\n")  # read, and the key is gone
+    svc.rescan_exposures(cid, env=env(tree))
+    assert stored_in(svc, cid) == ["b.env"]
+
+
+@pytest.mark.parametrize("how", ["full scan", "rescan"])
+def test_a_deleted_file_loses_its_location(svc: MechaService, tree: Path, how: str) -> None:
+    home = tree / "home"
+    key = ant()
+    cid = svc.add(key).credential.id
+    (home / "proj").mkdir()
+    (home / "proj" / ".env").write_text(f"ANTHROPIC_API_KEY={key}\n")
+    (home / ".zsh_history").write_text(f": 1:0;export ANTHROPIC_API_KEY={key}\n")
+    svc.scan(Options(roots=[home]), env=env(tree))
+    assert stored_in(svc, cid) == [".env", ".zsh_history"]
+    (home / "proj" / ".env").unlink()
+    if how == "rescan":
+        svc.rescan_exposures(cid, env=env(tree))
+    else:
+        svc.scan(Options(roots=[home]), env=env(tree))
+    assert stored_in(svc, cid) == [".zsh_history"]
+    assert svc.get(cid).credential.facts.exposure is not None
+
+
+def test_a_key_removed_from_a_config_inside_library_loses_its_location(
+    svc: MechaService, tree: Path
+) -> None:
+    """~/Library is excluded from the walk, but known configs inside it are read."""
+    home = tree / "home"
+    key = ant()
+    cid = svc.add(key).credential.id
+    config = home / "Library" / "Application Support" / "Claude" / "claude_desktop_config.json"
+    config.parent.mkdir(parents=True)
+    config.write_text(json.dumps({"mcpServers": {"x": {"env": {"ANTHROPIC_API_KEY": key}}}}))
+    darwin = env(tree, "darwin")
+    svc.scan(Options(roots=[home]), env=darwin)
+    assert stored_in(svc, cid) == ["claude_desktop_config.json"]
+    config.write_text(json.dumps({"mcpServers": {}}))
+    svc.scan(Options(roots=[home]), env=darwin)
+    assert stored_in(svc, cid) == []
+    assert svc.get(cid).credential.facts.exposure is None
+
+
+# --- importing ---------------------------------------------------------------------------
+
+
+def test_import_rereads_with_the_scan_checks_and_stops_past_the_line(
+    svc: MechaService, tree: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = tree / "home"
+    (home / "a.env").write_text(f"ANTHROPIC_API_KEY={ant()}\n" + "x=1\n" * 50)
+    report = svc.scan(Options(roots=[home]), env=env(tree))
+    fid = report.findings[0].location.id
+    monkeypatch.setattr(fsio, "cloud_only", lambda st: True)  # went to iCloud meanwhile
+    opened: list[Path] = []
+    real_open = fsio.open_binary
+
+    def spy(path: Path):  # type: ignore[no-untyped-def]
+        opened.append(Path(path))
+        return real_open(path)
+
+    monkeypatch.setattr(fsio, "open_binary", spy)
+    assert svc.import_found(report, [fid]) == [{"id": fid, "ok": False, "code": "not_readable"}]
+    assert opened == [], "a cloud-only file is never opened (it would be downloaded)"
+
+    monkeypatch.undo()
+    from mecha.scan import walk
+
+    consumed: list[int] = []
+    real_lines = walk.fsio.lines
+
+    def counting(path: Path, kind: object):  # type: ignore[no-untyped-def]
+        for item in real_lines(path, kind):  # type: ignore[arg-type]
+            consumed.append(item[0])
+            yield item
+
+    monkeypatch.setattr(walk.fsio, "lines", counting)
+    assert walk.read_token(report.findings[0].location) is not None
+    assert consumed == [1]

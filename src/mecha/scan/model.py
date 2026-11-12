@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass, field
+from datetime import datetime
 from enum import StrEnum
 from pathlib import Path
 
@@ -101,6 +102,40 @@ class ScanReport:
     skipped: Skipped = field(default_factory=Skipped)
     warnings: list[str] = field(default_factory=list)
     store_checked: bool = False  # False when the store was locked: no cross-reference
+    scanned_at: datetime | None = None  # set by the cross-reference (seen_at of locations)
+    # What this scan read and what it skipped (resolved paths), so it only replaces the
+    # stored locations of files it actually read. Emptied after the cross-reference: a
+    # listing of the home folder has no reason to stay in memory.
+    read: set[Path] = field(default_factory=set)
+    not_read: set[Path] = field(default_factory=set)  # files and folders skipped
+    protected_skipped: set[Path] = field(default_factory=set)  # macOS: not even stat()ed
+    max_size: int = 1024 * 1024  # the limits it read with (an import checks them again)
+    max_notebook: int = 20 * 1024 * 1024
+
+    def keeps(self, path: Path) -> bool:
+        """Whether a stored location at ``path`` survives this scan: replaced if the file
+        was read, kept if it was skipped or never looked at, dropped if it is gone."""
+        if path in self.read:
+            return False
+        roots = [r.resolve() for r in self.roots]
+        if not any(path == r or r in path.parents for r in roots):
+            return True  # outside this scan
+        if any(q in self.protected_skipped for q in path.parents):
+            return True  # a protected folder this scan was not allowed into: not even stat()
+        try:
+            path.stat()
+        except (FileNotFoundError, NotADirectoryError):
+            return False  # deleted since: gone wherever it was
+        except OSError:
+            return True  # cannot tell: keep it
+        # Still there but not read: skipped (excluded folder, cloud-only, too large,
+        # unreadable, see `not_read`) or not reached. Either way this scan cannot say.
+        return True
+
+    def forget_paths(self) -> None:
+        self.read = set()
+        self.not_read = set()
+        self.protected_skipped = set()
 
     @property
     def amber(self) -> bool:

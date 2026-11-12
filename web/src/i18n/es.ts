@@ -248,6 +248,8 @@ export const es: Record<MessageKey, string> = {
   scanCell: '{path} (celda {cell}, línea {line})',
   'scanCode.changed': 'el fichero ha cambiado desde el escaneo',
   'scanCode.duplicate': 'ya guardada',
+  'scanCode.not_readable':
+    'ahora no se puede leer el fichero (solo en la nube, demasiado grande o sin permiso)',
   'scanCode.not_found': 'no está en el último escaneo',
   'scanCode.not_storable': 'nunca se guarda (refresh token)',
   'scanCode.session_file': 'un fichero de sesión: vincúlalo',

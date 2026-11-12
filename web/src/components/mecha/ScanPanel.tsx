@@ -8,7 +8,7 @@ import type { MessageKey } from '@/i18n/en'
 import type { Api } from '@/lib/api'
 import { ApiError } from '@/lib/errors'
 import { SCAN_KEY, SCAN_PROGRESS_KEY, type ScanProgress } from '@/lib/scan'
-import type { ScanFinding, ScanReport } from '@/lib/types'
+import type { ScanFinding, ScanReport, ScanState } from '@/lib/types'
 import { cn } from '@/lib/utils'
 import { useToast } from './Toaster'
 import { providerName, riskText, whereText } from './text'
@@ -191,7 +191,9 @@ export function ScanPanel({
     enabled: false,
     gcTime: 0,
   }).data
-  const running = state.data?.running || progress?.outcome === 'running'
+  // Running or not comes from the server only (refetched on scan_started / scan_done, and
+  // on any reconnect); the event stream adds just the file count.
+  const running = state.data?.running ?? false
 
   const start = useMutation({
     mutationFn: () => api.scanStart(includeProtected),
@@ -199,10 +201,15 @@ export function ScanPanel({
       setChosen(new Set())
       setFailures({})
       qc.setQueryData<ScanProgress>(SCAN_PROGRESS_KEY, { files: 0, outcome: 'running' })
+      // Optimistic, in the server's own state: the next refetch replaces it.
+      qc.setQueryData<ScanState>(SCAN_KEY, (old) =>
+        old ? { ...old, running: true, report: null } : old,
+      )
     },
     onSuccess: () => void qc.invalidateQueries({ queryKey: SCAN_KEY }),
     onError: (e: Error) => {
       qc.setQueryData(SCAN_PROGRESS_KEY, null)
+      void qc.invalidateQueries({ queryKey: SCAN_KEY })
       toast(t('failed', { message: e.message }), 'error')
     },
   })

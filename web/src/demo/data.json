@@ -19235,7 +19235,11 @@
      "facts": {
       "account": {},
       "expires_at": null,
-      "exposure": null,
+      "exposure": {
+       "info": 1,
+       "risky": 0,
+       "scanned_at": "2026-11-04T09:30:00Z"
+      },
       "funds": null,
       "funds_info": null,
       "last_probe_at": null,
@@ -19315,7 +19319,11 @@
       "facts": {
        "account": {},
        "expires_at": null,
-       "exposure": null,
+       "exposure": {
+        "info": 1,
+        "risky": 0,
+        "scanned_at": "2026-11-04T09:30:00Z"
+       },
        "funds": null,
        "funds_info": null,
        "last_probe_at": null,
@@ -19396,6 +19404,20 @@
     },
     "status": 200
    },
+   "exposures": {
+    "exposures": [
+     {
+      "cell_line": null,
+      "column": 16,
+      "line": 3,
+      "path": "/home/demo/projects/chatbot/.env",
+      "risks": [],
+      "seen_at": "2026-11-04T09:30:00+00:00"
+     }
+    ],
+    "home": "/home/demo",
+    "scanned_at": "2026-11-04T09:30:00+00:00"
+   },
    "probe": {
     "body": {
      "cached": false,
@@ -19405,7 +19427,11 @@
       "facts": {
        "account": {},
        "expires_at": null,
-       "exposure": null,
+       "exposure": {
+        "info": 1,
+        "risky": 0,
+        "scanned_at": "2026-11-04T09:30:00Z"
+       },
        "funds": null,
        "funds_info": null,
        "last_probe_at": "2026-11-04T09:30:00Z",
@@ -19501,7 +19527,11 @@
      "facts": {
       "account": {},
       "expires_at": null,
-      "exposure": null,
+      "exposure": {
+       "info": 0,
+       "risky": 1,
+       "scanned_at": "2026-11-04T09:30:00Z"
+      },
       "funds": null,
       "funds_info": null,
       "last_probe_at": null,
@@ -19558,11 +19588,11 @@
      "last_used_at": null,
      "limits": null,
      "mode": "offline",
-     "overall": "grey",
+     "overall": "amber",
      "reasons": [
       {
-       "code": "not_checked",
-       "overall": "grey"
+       "code": "exposed_in_plaintext",
+       "overall": "amber"
       }
      ],
      "validity": {
@@ -19581,7 +19611,11 @@
       "facts": {
        "account": {},
        "expires_at": null,
-       "exposure": null,
+       "exposure": {
+        "info": 0,
+        "risky": 1,
+        "scanned_at": "2026-11-04T09:30:00Z"
+       },
        "funds": null,
        "funds_info": null,
        "last_probe_at": null,
@@ -19610,7 +19644,7 @@
      },
      "last_known": {
       "checked_at": "2026-11-04T09:30:00+00:00",
-      "overall": "green"
+      "overall": "amber"
      },
      "probe_next_at": null,
      "result": {
@@ -19646,11 +19680,11 @@
       "last_used_at": null,
       "limits": null,
       "mode": "passive",
-      "overall": "green",
+      "overall": "amber",
       "reasons": [
        {
-        "code": "valid",
-        "overall": "green"
+        "code": "exposed_in_plaintext",
+        "overall": "amber"
        }
       ],
       "validity": {
@@ -19662,6 +19696,22 @@
     },
     "status": 200
    },
+   "exposures": {
+    "exposures": [
+     {
+      "cell_line": null,
+      "column": 1,
+      "line": 7,
+      "path": "/home/demo/Dropbox/notes/keys.txt",
+      "risks": [
+       "synced_folder"
+      ],
+      "seen_at": "2026-11-04T09:30:00+00:00"
+     }
+    ],
+    "home": "/home/demo",
+    "scanned_at": "2026-11-04T09:30:00+00:00"
+   },
    "probe": {
     "body": {
      "cached": false,
@@ -19671,7 +19721,11 @@
       "facts": {
        "account": {},
        "expires_at": null,
-       "exposure": null,
+       "exposure": {
+        "info": 0,
+        "risky": 1,
+        "scanned_at": "2026-11-04T09:30:00Z"
+       },
        "funds": null,
        "funds_info": null,
        "last_probe_at": "2026-11-04T09:30:00Z",
@@ -19700,7 +19754,7 @@
      },
      "last_known": {
       "checked_at": "2026-11-04T09:30:00+00:00",
-      "overall": "green"
+      "overall": "amber"
      },
      "probe_next_at": null,
      "result": {
@@ -19736,11 +19790,11 @@
       "last_used_at": null,
       "limits": null,
       "mode": "passive",
-      "overall": "green",
+      "overall": "amber",
       "reasons": [
        {
-        "code": "valid",
-        "overall": "green"
+        "code": "exposed_in_plaintext",
+        "overall": "amber"
        }
       ],
       "validity": {
@@ -19767,7 +19821,11 @@
      "facts": {
       "account": {},
       "expires_at": null,
-      "exposure": null,
+      "exposure": {
+       "info": 0,
+       "risky": 1,
+       "scanned_at": "2026-11-04T09:30:00Z"
+      },
       "funds": null,
       "funds_info": null,
       "last_probe_at": null,
@@ -19824,11 +19882,11 @@
      "last_used_at": null,
      "limits": null,
      "mode": "offline",
-     "overall": "grey",
+     "overall": "amber",
      "reasons": [
       {
-       "code": "not_checked",
-       "overall": "grey"
+       "code": "exposed_in_plaintext",
+       "overall": "amber"
       }
      ],
      "validity": {
@@ -19847,7 +19905,11 @@
       "facts": {
        "account": {},
        "expires_at": null,
-       "exposure": null,
+       "exposure": {
+        "info": 0,
+        "risky": 1,
+        "scanned_at": "2026-11-04T09:30:00Z"
+       },
        "funds": null,
        "funds_info": null,
        "last_probe_at": null,
@@ -19876,7 +19938,7 @@
      },
      "last_known": {
       "checked_at": "2026-11-04T09:30:00+00:00",
-      "overall": "green"
+      "overall": "amber"
      },
      "probe_next_at": null,
      "result": {
@@ -19912,11 +19974,11 @@
       "last_used_at": null,
       "limits": null,
       "mode": "passive",
-      "overall": "green",
+      "overall": "amber",
       "reasons": [
        {
-        "code": "valid",
-        "overall": "green"
+        "code": "exposed_in_plaintext",
+        "overall": "amber"
        }
       ],
       "validity": {
@@ -19928,6 +19990,23 @@
     },
     "status": 200
    },
+   "exposures": {
+    "exposures": [
+     {
+      "cell_line": 2,
+      "column": 22,
+      "line": 4,
+      "path": "/home/demo/notebooks/experiments.ipynb",
+      "risks": [
+       "notebook",
+       "git_not_ignored"
+      ],
+      "seen_at": "2026-11-04T09:30:00+00:00"
+     }
+    ],
+    "home": "/home/demo",
+    "scanned_at": "2026-11-04T09:30:00+00:00"
+   },
    "probe": {
     "body": {
      "cached": false,
@@ -19937,7 +20016,11 @@
       "facts": {
        "account": {},
        "expires_at": null,
-       "exposure": null,
+       "exposure": {
+        "info": 0,
+        "risky": 1,
+        "scanned_at": "2026-11-04T09:30:00Z"
+       },
        "funds": null,
        "funds_info": null,
        "last_probe_at": "2026-11-04T09:30:00Z",
@@ -19966,7 +20049,7 @@
      },
      "last_known": {
       "checked_at": "2026-11-04T09:30:00+00:00",
-      "overall": "green"
+      "overall": "amber"
      },
      "probe_next_at": null,
      "result": {
@@ -20002,11 +20085,11 @@
       "last_used_at": null,
       "limits": null,
       "mode": "passive",
-      "overall": "green",
+      "overall": "amber",
       "reasons": [
        {
-        "code": "valid",
-        "overall": "green"
+        "code": "exposed_in_plaintext",
+        "overall": "amber"
        }
       ],
       "validity": {

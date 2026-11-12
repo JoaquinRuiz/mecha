@@ -358,3 +358,82 @@ def test_cli_where(home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     (home / ".zsh_history").write_text(": 1:0;ls\n")
     r = runner.invoke(cli_app, ["where", cid, "--rescan", "--json"])
     assert json.loads(r.output)["exposures"] == []
+
+
+def test_same_key_in_two_files_imports_once_with_both_locations(
+    api: tuple[TestClient, ApiContext], home: Path
+) -> None:
+    client, _ = api
+    key = ant()
+    (home / "proj").mkdir()
+    (home / "proj" / ".env").write_text(f"ANTHROPIC_API_KEY={key}\n")
+    (home / ".zsh_history").write_text(f": 1:0;export ANTHROPIC_API_KEY={key}\n")
+    client.post("/api/scan", json={})
+    report = wait_done(client)["report"]
+    ids = [f["id"] for f in report["findings"]]
+    assert len(ids) == 2
+    results = client.post("/api/scan/import", json={"ids": ids}).json()["results"]
+    assert [r["ok"] for r in results] == [True, True]
+    cid = results[0]["credential_id"]
+    assert results[1]["credential_id"] == cid
+    after = client.get("/api/scan").json()["report"]
+    assert {f["stored_id"] for f in after["findings"]} == {cid}
+    where = client.get(f"/api/credentials/{cid}/exposures").json()
+    assert sorted(Path(e["path"]).name for e in where["exposures"]) == [".env", ".zsh_history"]
+    assert {e["seen_at"] for e in where["exposures"]} == {after["finished_at"]}
+    listing = client.get("/api/credentials").json()["credentials"]
+    assert len(listing) == 1
+    assert "exposed_in_plaintext" in [x["code"] for x in listing[0]["result"]["reasons"]]
+
+
+def test_one_chosen_row_marks_every_row_with_that_key(
+    api: tuple[TestClient, ApiContext], home: Path
+) -> None:
+    client, _ = api
+    key = ant()
+    (home / "a.env").write_text(f"ANTHROPIC_API_KEY={key}\n")
+    (home / ".zsh_history").write_text(f": 1:0;export ANTHROPIC_API_KEY={key}\n")
+    client.post("/api/scan", json={})
+    report = wait_done(client)["report"]
+    env_row = next(f for f in report["findings"] if Path(f["path"]).name == "a.env")
+    cid = client.post("/api/scan/import", json={"ids": [env_row["id"]]}).json()["results"][0][
+        "credential_id"
+    ]
+    after = client.get("/api/scan").json()["report"]
+    assert {f["stored_id"] for f in after["findings"]} == {cid}
+    assert {f["not_importable"] for f in after["findings"]} == {"duplicate"}
+    where = client.get(f"/api/credentials/{cid}/exposures").json()["exposures"]
+    assert len(where) == 2
+
+
+def test_sqlite_only_on_the_loop_and_files_only_in_a_worker(
+    api: tuple[TestClient, ApiContext], home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The connection is opened with check_same_thread=False: a query from the worker
+    thread would not fail by itself, so every statement records the thread it ran on."""
+    client, ctx = api
+    key = ant()
+    cid = client.post("/api/credentials", json={"secret": key}).json()["credential"]["id"]
+    (home / ".zsh_history").write_text(f": 1:0;export ANTHROPIC_API_KEY={key}\n")
+    (home / "new.env").write_text(f"OPENAI_API_KEY={CANARY}\n")
+    loop_thread = client.portal.call(threading.get_ident)  # type: ignore[union-attr]
+    sql_threads: set[int] = set()
+    ctx.service.store.conn.set_trace_callback(lambda _q: sql_threads.add(threading.get_ident()))
+    file_threads: set[int] = set()
+    real_open = fsio.open_binary
+
+    def spy(path: Path):  # type: ignore[no-untyped-def]
+        file_threads.add(threading.get_ident())
+        return real_open(path)
+
+    monkeypatch.setattr(fsio, "open_binary", spy)
+
+    client.post("/api/scan", json={})
+    report = wait_done(client)["report"]
+    new = next(f for f in report["findings"] if Path(f["path"]).name == "new.env")
+    assert client.post("/api/scan/import", json={"ids": [new["id"]]}).json()["results"][0]["ok"]
+    assert client.post(f"/api/credentials/{cid}/exposures/rescan").status_code == 200
+    ctx.service.store.conn.set_trace_callback(None)
+    assert sql_threads == {loop_thread}
+    assert file_threads, "files were read"
+    assert loop_thread not in file_threads, "never on the event loop"

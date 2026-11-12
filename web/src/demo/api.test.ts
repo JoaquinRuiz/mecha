@@ -146,6 +146,7 @@ describe('web demo in-memory API', () => {
     const id = results[0]?.credential_id as string
     expect((await api.list()).credentials.some((c) => c.credential.id === id)).toBe(true)
     await expect(api.check(id)).resolves.toBeTruthy()
+    expect((await api.exposures(id)).exposures.map((e) => e.path)).toEqual([finding.path])
 
     const stored = report.findings.find((f) => f.stored_id)?.stored_id as string
     const where = await api.exposures(stored)

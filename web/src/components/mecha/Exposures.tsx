@@ -16,10 +16,13 @@ export function ExposuresSection({
   credential,
   api,
   now,
+  paused = false,
 }: {
   credential: Credential
   api: Api
   now: string
+  /** While the credential is being deleted: refetching its locations would 404. */
+  paused?: boolean
 }) {
   const i18n = useI18n()
   const { t } = i18n
@@ -30,7 +33,7 @@ export function ExposuresSection({
   const where = useQuery({
     queryKey: ['exposures', id],
     queryFn: () => api.exposures(id),
-    enabled: !!summary,
+    enabled: !!summary && !paused,
   })
   const rescan = useMutation({
     mutationFn: () => api.rescanExposures(id),

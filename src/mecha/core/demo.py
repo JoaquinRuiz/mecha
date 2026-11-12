@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from mecha.core.config import Config
-from mecha.core.errors import DetectionError
+from mecha.core.errors import DetectionError, DuplicateCredentialError
 from mecha.core.models import (
     Budget,
     CheckStatus,
@@ -524,6 +524,7 @@ def demo_report(
         if progress is not None:
             progress(files * step // steps, DEMO_HOME)
     report = ScanReport(roots=wanted, findings=[f.finding() for f in found], files_scanned=files)
+    report.read = {f.path for f in DEMO_FOUND if inside(f.path, wanted)}  # "read" them all
     report.skipped.excluded_dir = 214 if wanted == [DEMO_HOME] else 0
     report.skipped.binary = 96 if wanted == [DEMO_HOME] else 0
     return report
@@ -579,34 +580,36 @@ class DemoService(MechaService):
     ) -> ScanReport:
         return demo_report(options.roots, progress, stop, self.scan_seconds)
 
-    def import_found(self, report: ScanReport, ids: Iterable[str]) -> list[dict[str, object]]:
-        """Like the real import but without reading any file: the redacted form only."""
+    # Importing works like the real one (rows with the same key are one credential, and
+    # it keeps where it was found) but reads no file: only the redacted form is kept.
+    def read_found(self, report: ScanReport, ids: Iterable[str], store: Store) -> dict[str, str]:
         by_id = {f.location.id: f for f in report.findings}
-        results: list[dict[str, object]] = []
+        out: dict[str, str] = {}
         for fid in ids:
             f = by_id.get(fid)
             reason = "not_found" if f is None else _demo_not_importable(f)
-            if f is None or reason is not None:
-                results.append({"id": fid, "ok": False, "code": reason})
-                continue
-            fingerprint = f.fingerprint or _fingerprint(fid)
-            existing = self.store.by_fingerprint(fingerprint)
-            if existing is not None:
-                results.append({"id": fid, "ok": False, "code": "duplicate"})
-                continue
-            cred = Credential(
-                id=new_ulid(),
-                label=f.name or f"{f.location.path.name}:{f.location.line}",
-                provider=ProviderId(f.provider or ""),
-                kind=CredentialKind(f.kind or "api_key"),
-                pattern_id=None,
-                redacted=f.redacted,
-                fingerprint=fingerprint,
-                created_at=self.now(),
-            )
-            self.store.insert(cred, None)
-            results.append({"id": fid, "ok": True, "credential_id": cred.id})
-        return results
+            out[fid] = f"!{reason}" if reason is not None else "demo"  # no secret, ever
+        return out
+
+    def _found_fingerprint(self, f: Finding, secret: str) -> str:
+        return f.fingerprint or _fingerprint(f.location.id)
+
+    def _import_one(self, f: Finding, secret: str, fingerprint: str) -> str:
+        existing = self.store.by_fingerprint(fingerprint)
+        if existing is not None:
+            raise DuplicateCredentialError(f"Already stored as {existing}.", existing)
+        cred = Credential(
+            id=new_ulid(),
+            label=f.name or f"{f.location.path.name}:{f.location.line}",
+            provider=ProviderId(f.provider or ""),
+            kind=CredentialKind(f.kind or "api_key"),
+            pattern_id=None,
+            redacted=f.redacted,
+            fingerprint=fingerprint,
+            created_at=self.now(),
+        )
+        self.store.insert(cred, None)
+        return cred.id
 
     def is_fresh(self, cred: Credential, now: datetime) -> bool:
         return False  # every demo check "runs"

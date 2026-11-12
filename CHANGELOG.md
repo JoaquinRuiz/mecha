@@ -17,6 +17,15 @@ All notable changes to this project are documented here. The format follows
 - `mecha serve --demo` scans a made-up home folder instead of your disk, and the web
   demo replays that scan.
 
+### Fixed
+
+- A scan no longer drops the stored locations of files it did not read: a protected
+  folder scanned only the time before, a file now only in the cloud, or one it could not
+  read keep their locations. A deleted file still loses them.
+- `mecha scan --import` keeps where the key was found (it no longer waits for the next
+  scan), and the same key found in two files is imported once instead of failing as a
+  duplicate. Import also checks again that the file is not cloud-only or too large.
+
 ## [0.2.0] - 2026-11-09
 
 ### Added
