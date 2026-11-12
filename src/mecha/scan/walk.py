@@ -32,6 +32,11 @@ MAX_NOTEBOOK = 20 * 1024 * 1024  # notebooks carry outputs
 
 Fingerprint = Callable[[str], str | None]
 Progress = Callable[[int, Path], None]
+Stop = Callable[[], bool]
+
+
+class ScanCancelled(Exception):
+    """Raised between two files when ``stop()`` says so. A cancelled scan reports nothing."""
 
 
 @dataclass
@@ -49,11 +54,13 @@ class Scanner:
         options: Options,
         fingerprint: Fingerprint,
         progress: Progress | None = None,
+        stop: Stop | None = None,
     ) -> None:
         self.env = env
         self.options = options
         self.fingerprint = fingerprint
         self.progress = progress
+        self.stop = stop
         explicit = [Path(r).expanduser().absolute() for r in options.roots]
         self.roots = explicit or [env.home]
         self.excluded = excluded_dirs(env)
@@ -68,10 +75,14 @@ class Scanner:
 
     # --- what to read ---------------------------------------------------------------------
     def _places(self) -> Iterator[tuple[Path, PlaceKind]]:
+        """Known places under the roots. A root may also be a single file inside a known
+        folder (rescanning one location): it is still read as what it is (a history…)."""
         for place in known_places(self.env):
-            if not any(inside(place.path, [r]) for r in self.roots):
+            if not any(inside(place.path, [r]) or inside(r, [place.path]) for r in self.roots):
                 continue
-            yield from self._expand(place)
+            for path, kind in self._expand(place):
+                if any(inside(path, [r]) for r in self.roots):
+                    yield path, kind
 
     def _expand(self, place: Place) -> Iterator[tuple[Path, PlaceKind]]:
         if place.pattern is None:
@@ -92,6 +103,7 @@ class Scanner:
         stack = [root]
         while stack:
             folder = stack.pop()
+            self._check_stop()
             try:
                 entries = sorted(os.scandir(folder), key=lambda e: e.name)
             except OSError:
@@ -138,7 +150,12 @@ class Scanner:
                 self._file(path, kind)
         return self.report
 
+    def _check_stop(self) -> None:
+        if self.stop is not None and self.stop():
+            raise ScanCancelled
+
     def _file(self, path: Path, kind: PlaceKind) -> None:
+        self._check_stop()
         real = path.resolve()
         if real in self._seen:
             return

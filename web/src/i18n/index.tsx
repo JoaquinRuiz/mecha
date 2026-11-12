@@ -19,6 +19,7 @@ export interface I18n {
   plural: (base: 'plural.credential', count: number) => string
   relative: (date: string | Date, now: string | Date) => string
   date: (date: string | Date) => string
+  time: (date: string | Date) => string
   money: (amount: number | string, currency?: string | null) => string
   number: (n: number) => string
 }
@@ -39,6 +40,7 @@ export function makeI18n(lang: Lang): I18n {
   const rules = new Intl.PluralRules(lang)
   const nf = new Intl.NumberFormat(lang)
   const df = new Intl.DateTimeFormat(lang, { dateStyle: 'medium' })
+  const tf = new Intl.DateTimeFormat(lang, { timeStyle: 'short' })
   const t = (key: MessageKey, params: Params = {}) =>
     dict[key].replace(/\{(\w+)\}/g, (m, name: string) =>
       name in params ? String(params[name]) : m,
@@ -61,6 +63,7 @@ export function makeI18n(lang: Lang): I18n {
       return rtf.format(0, 'second')
     },
     date: (date) => df.format(new Date(date)),
+    time: (date) => tf.format(new Date(date)),
     money: (amount, currency) =>
       new Intl.NumberFormat(lang, {
         style: 'currency',

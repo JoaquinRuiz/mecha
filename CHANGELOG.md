@@ -4,6 +4,19 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- Scan from the dashboard: a «Scan» tab in the add dialog scans your home folder (offline,
+  in the background, with a Stop button), lists what it found redacted and imports the
+  keys you choose. The report stays in the server's memory for 30 minutes at most.
+- The detail sheet of a stored key says where `mecha scan` found it in plaintext, and can
+  scan just those files again after you clean them up. `mecha where <id> [--rescan]` does
+  the same from the CLI.
+- `mecha serve --demo` scans a made-up home folder instead of your disk, and the web
+  demo replays that scan.
+
 ## [0.2.0] - 2026-11-09
 
 ### Added

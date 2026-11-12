@@ -759,27 +759,9 @@ SCAN_WARNINGS = {
 
 
 def _finding_json(f: Any) -> dict[str, Any]:
-    from mecha.core.service import _not_importable
+    from mecha.core.service import finding_json
 
-    return {
-        "id": f.location.id,
-        "path": str(f.location.path),
-        "line": f.location.line,
-        "cell_line": f.location.cell_line,
-        "column": f.location.column,
-        "provider": f.provider,
-        "kind": f.kind,
-        "redacted": f.redacted,
-        "name": f.name,
-        "confidence": f.confidence.value,
-        "severity": "amber" if f.amber else "info",
-        "risks": [r.value for r in f.risks],
-        "notes": list(f.notes),
-        "stored_id": f.stored_id,
-        "session_file": f.session_file,
-        "importable": _not_importable(f) is None,
-        "check": f.check,
-    }
+    return finding_json(f)
 
 
 def _where(f: Any, roots: list[Path]) -> str:
@@ -960,6 +942,66 @@ def scan_cmd(
         else:
             console.print(f"[red]not imported[/red] {r['id']}: {r['code']}")
     raise typer.Exit(code)
+
+
+@app.command("where")
+@handle_errors
+def where_cmd(
+    credential: Annotated[str, typer.Argument(help="ID (or a unique prefix) of the credential.")],
+    rescan: Annotated[
+        bool,
+        typer.Option("--rescan", help="Read those files again first (only those, offline)."),
+    ] = False,
+    as_json: Annotated[bool, typer.Option("--json", help="Machine-readable output.")] = False,
+) -> None:
+    """Where `mecha scan` found this stored key in plaintext.
+
+    The locations are kept encrypted and only for keys Mecha keeps. After cleaning a file
+    up, `--rescan` reads again just the files listed here and updates the list.
+    """
+    service = _service()
+    try:
+        cred = service.get(credential).credential
+        items = service.rescan_exposures(cred.id) if rescan else service.exposures(cred.id)
+        scanned = service.get(cred.id).credential.facts.exposure
+    finally:
+        service.close()
+    if as_json:
+        print(
+            json.dumps(
+                {
+                    "id": cred.id,
+                    "scanned_at": scanned.scanned_at.isoformat() if scanned else None,
+                    "exposures": items,
+                },
+                indent=2,
+            )
+        )
+        return
+    if not items:
+        console.print(f"{cred.label} ({cred.redacted}): not found in plaintext by `mecha scan`.")
+        return
+    table = Table(
+        title=f"{cred.label} ({cred.redacted}) in plaintext",
+        title_justify="left", show_edge=False, box=None, pad_edge=False,
+    )  # fmt: skip
+    for col in ("Severity", "Where", "Note", "Seen"):
+        table.add_column(col, overflow="fold")
+    home = Path.home()
+    for item in items:
+        path = Path(str(item["path"]))
+        if home in path.parents:
+            path = Path("~") / path.relative_to(home)
+        cell = item.get("cell_line")
+        where = f"{path} (cell {item['line']}, line {cell})" if cell else f"{path}:{item['line']}"
+        risks = [str(r) for r in item["risks"]]  # type: ignore[attr-defined]
+        table.add_row(
+            "[yellow]amber[/yellow]" if risks else "info",
+            escape(where),
+            escape("; ".join(RISK_TEXT.get(r, r) for r in risks)),
+            str(item["seen_at"])[:10],
+        )
+    console.print(table)
 
 
 @app.command("link")

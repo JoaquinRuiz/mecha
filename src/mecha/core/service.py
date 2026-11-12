@@ -207,6 +207,31 @@ def _not_importable(f: Finding) -> str | None:
     return None
 
 
+def finding_json(f: Finding) -> dict[str, Any]:
+    """A finding for the CLI's --json and the API: where and what, never the key or line."""
+    reason = _not_importable(f)
+    return {
+        "id": f.location.id,
+        "path": str(f.location.path),
+        "line": f.location.line,
+        "cell_line": f.location.cell_line,
+        "column": f.location.column,
+        "provider": f.provider,
+        "kind": f.kind,
+        "redacted": f.redacted,
+        "name": f.name,
+        "confidence": f.confidence.value,
+        "severity": "amber" if f.amber else "info",
+        "risks": [r.value for r in f.risks],
+        "notes": list(f.notes),
+        "stored_id": f.stored_id,
+        "session_file": f.session_file,
+        "importable": reason is None,
+        "not_importable": reason,
+        "check": f.check,
+    }
+
+
 def forget_reporter(facts: CredentialFacts, reporter: str) -> CredentialFacts:
     """Drop every fact a deleted admin/management key had reported about this credential."""
     out = facts.model_copy(deep=True)
@@ -778,18 +803,54 @@ class MechaService:
         progress: Callable[[int, Path], None] | None = None,
         *,
         use_store: bool = True,
+        stop: Callable[[], bool] | None = None,
     ) -> ScanReport:
         """Find plaintext keys (offline). Locations of keys Mecha manages are kept encrypted;
         the rest only appear in the returned report. With a locked store the scan still
         runs, without the cross-reference, and says so."""
-        store: Store | None = None
-        if use_store:  # never create a store just to scan
-            try:
-                store = self.store
-            except MechaError:
-                store = None
+        store = self.scan_store(use_store)
+        report = self.read_files(options, store, env, progress, stop)
+        return self.cross_reference(report, store, use_store=use_store)
+
+    # The scan in three steps, so the server can read files in a worker thread while every
+    # SQLite access stays on the event loop's thread (the connection is never shared).
+    scan_env: ScanEnv | None = None  # the machine scanned (tests inject a temporary home)
+
+    def scan_home(self) -> Path:
+        """The home folder a scan covers by default (the UI shows paths under it as ~)."""
+        return (self.scan_env or ScanEnv.current()).home
+
+    def scan_has_protected(self) -> bool:
+        """Whether this system has folders that need --include-protected (macOS)."""
+        return (self.scan_env or ScanEnv.current()).platform == "darwin"
+
+    def scan_store(self, use_store: bool = True) -> Store | None:
+        """The store to compare with, if it can be opened (never created just to scan)."""
+        if not use_store:
+            return None
+        try:
+            return self.store
+        except MechaError:
+            return None
+
+    def read_files(
+        self,
+        options: ScanOptions,
+        store: Store | None,
+        env: ScanEnv | None = None,
+        progress: Callable[[int, Path], None] | None = None,
+        stop: Callable[[], bool] | None = None,
+    ) -> ScanReport:
+        """Read the files and report what is found. Safe in another thread: from the store
+        it only uses the fingerprint key (an HMAC in memory), never the database."""
         fingerprint = store.cipher.fingerprint if store is not None else (lambda _s: None)
-        report = Scanner(env or ScanEnv.current(), options, fingerprint, progress).run()
+        env = env or self.scan_env or ScanEnv.current()
+        return Scanner(env, options, fingerprint, progress, stop).run()
+
+    def cross_reference(
+        self, report: ScanReport, store: Store | None, *, use_store: bool = True
+    ) -> ScanReport:
+        """Match findings with stored keys (by fingerprint) and save their locations."""
         if store is None:
             report.warnings.append("store_locked" if use_store else "no_store")
             return report
@@ -803,6 +864,23 @@ class MechaService:
         report.findings = out
         self._save_exposures(store, report)
         return report
+
+    def exposure_paths(self, id_or_prefix: str) -> builtins.list[Path]:
+        """The files a stored key was found in: what "scan these files again" reads."""
+        paths = {Path(str(item["path"])) for item in self.exposures(id_or_prefix)}
+        return sorted(paths)
+
+    def rescan_exposures(
+        self, id_or_prefix: str, env: ScanEnv | None = None
+    ) -> builtins.list[dict[str, object]]:
+        """Scan again only the files where this key was found (all in this thread)."""
+        cred = self.get(id_or_prefix).credential
+        paths = self.exposure_paths(cred.id)
+        if paths:
+            store = self.store
+            report = self.read_files(ScanOptions(roots=paths), store, env)
+            self.cross_reference(report, store)
+        return self.exposures(cred.id)
 
     def _save_exposures(self, store: Store, report: ScanReport) -> None:
         """Per stored key: replace its locations under the scanned roots, keep the others."""

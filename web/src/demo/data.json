@@ -740,7 +740,11 @@
      "facts": {
       "account": {},
       "expires_at": null,
-      "exposure": null,
+      "exposure": {
+       "info": 1,
+       "risky": 1,
+       "scanned_at": "2026-11-02T09:30:00Z"
+      },
       "funds": null,
       "funds_info": null,
       "last_probe_at": null,
@@ -823,6 +827,10 @@
      "reasons": [
       {
        "code": "expires_soon",
+       "overall": "amber"
+      },
+      {
+       "code": "exposed_in_plaintext",
        "overall": "amber"
       }
      ],
@@ -2079,6 +2087,32 @@
     }
    },
    "status": 200
+  }
+ },
+ "exposures": {
+  "01DEMO00000000000000000006": {
+   "exposures": [
+    {
+     "cell_line": null,
+     "column": 33,
+     "line": 1042,
+     "path": "/home/demo/.zsh_history",
+     "risks": [
+      "shell_history"
+     ],
+     "seen_at": "2026-11-04T09:30:00+00:00"
+    },
+    {
+     "cell_line": null,
+     "column": 19,
+     "line": 1,
+     "path": "/home/demo/projects/workshop/.env",
+     "risks": [],
+     "seen_at": "2026-11-04T09:30:00+00:00"
+    }
+   ],
+   "home": "/home/demo",
+   "scanned_at": "2026-11-04T09:30:00+00:00"
   }
  },
  "generated_at": "2026-11-04T09:30:00+00:00",
@@ -6418,6 +6452,10 @@
      {
       "code": "expires_soon",
       "overall": "amber"
+     },
+     {
+      "code": "exposed_in_plaintext",
+      "overall": "amber"
      }
     ],
     "validity": {
@@ -6463,6 +6501,10 @@
     "reasons": [
      {
       "code": "expires_soon",
+      "overall": "amber"
+     },
+     {
+      "code": "exposed_in_plaintext",
       "overall": "amber"
      }
     ],
@@ -6510,6 +6552,10 @@
      {
       "code": "expires_soon",
       "overall": "amber"
+     },
+     {
+      "code": "exposed_in_plaintext",
+      "overall": "amber"
      }
     ],
     "validity": {
@@ -6555,6 +6601,10 @@
     "reasons": [
      {
       "code": "expires_soon",
+      "overall": "amber"
+     },
+     {
+      "code": "exposed_in_plaintext",
       "overall": "amber"
      }
     ],
@@ -6602,6 +6652,10 @@
      {
       "code": "expires_soon",
       "overall": "amber"
+     },
+     {
+      "code": "exposed_in_plaintext",
+      "overall": "amber"
      }
     ],
     "validity": {
@@ -6647,6 +6701,10 @@
     "reasons": [
      {
       "code": "expires_soon",
+      "overall": "amber"
+     },
+     {
+      "code": "exposed_in_plaintext",
       "overall": "amber"
      }
     ],
@@ -6694,6 +6752,10 @@
      {
       "code": "expires_soon",
       "overall": "amber"
+     },
+     {
+      "code": "exposed_in_plaintext",
+      "overall": "amber"
      }
     ],
     "validity": {
@@ -6739,6 +6801,10 @@
     "reasons": [
      {
       "code": "expires_soon",
+      "overall": "amber"
+     },
+     {
+      "code": "exposed_in_plaintext",
       "overall": "amber"
      }
     ],
@@ -6786,6 +6852,10 @@
      {
       "code": "expires_soon",
       "overall": "amber"
+     },
+     {
+      "code": "exposed_in_plaintext",
+      "overall": "amber"
      }
     ],
     "validity": {
@@ -6831,6 +6901,10 @@
     "reasons": [
      {
       "code": "expires_soon",
+      "overall": "amber"
+     },
+     {
+      "code": "exposed_in_plaintext",
       "overall": "amber"
      }
     ],
@@ -6878,6 +6952,10 @@
      {
       "code": "expires_soon",
       "overall": "amber"
+     },
+     {
+      "code": "exposed_in_plaintext",
+      "overall": "amber"
      }
     ],
     "validity": {
@@ -6923,6 +7001,10 @@
     "reasons": [
      {
       "code": "expires_soon",
+      "overall": "amber"
+     },
+     {
+      "code": "exposed_in_plaintext",
       "overall": "amber"
      }
     ],
@@ -13153,7 +13235,11 @@
      "facts": {
       "account": {},
       "expires_at": null,
-      "exposure": null,
+      "exposure": {
+       "info": 1,
+       "risky": 1,
+       "scanned_at": "2026-11-02T09:30:00Z"
+      },
       "funds": null,
       "funds_info": null,
       "last_probe_at": null,
@@ -13236,6 +13322,10 @@
      "reasons": [
       {
        "code": "expires_soon",
+       "overall": "amber"
+      },
+      {
+       "code": "exposed_in_plaintext",
        "overall": "amber"
       }
      ],
@@ -15342,7 +15432,11 @@
      "facts": {
       "account": {},
       "expires_at": null,
-      "exposure": null,
+      "exposure": {
+       "info": 1,
+       "risky": 1,
+       "scanned_at": "2026-11-02T09:30:00Z"
+      },
       "funds": null,
       "funds_info": null,
       "last_probe_at": "2026-11-04T09:30:00Z",
@@ -15439,6 +15533,10 @@
      "reasons": [
       {
        "code": "expires_soon",
+       "overall": "amber"
+      },
+      {
+       "code": "exposed_in_plaintext",
        "overall": "amber"
       }
      ],
@@ -18950,5 +19048,981 @@
    "provider": "openrouter",
    "redacted": "sk-or-v1-480…8fbe"
   }
- ]
+ ],
+ "scan": {
+  "protected_option": true,
+  "report": {
+   "expires_at": "2026-11-04T10:00:00+00:00",
+   "files_scanned": 1843,
+   "findings": [
+    {
+     "cell_line": null,
+     "check": null,
+     "column": 16,
+     "confidence": "high",
+     "id": "51fb4161c6",
+     "importable": true,
+     "kind": "api_key",
+     "line": 3,
+     "name": "OPENAI_API_KEY",
+     "not_importable": null,
+     "notes": [],
+     "path": "/home/demo/projects/chatbot/.env",
+     "provider": "openai",
+     "redacted": "sk-proj-Tg5…b8Xe",
+     "risks": [],
+     "session_file": null,
+     "severity": "info",
+     "stored_id": null
+    },
+    {
+     "cell_line": null,
+     "check": null,
+     "column": 33,
+     "confidence": "high",
+     "id": "e964586844",
+     "importable": false,
+     "kind": "api_key",
+     "line": 1042,
+     "name": "ANTHROPIC_API_KEY",
+     "not_importable": "duplicate",
+     "notes": [],
+     "path": "/home/demo/.zsh_history",
+     "provider": "anthropic",
+     "redacted": "sk-ant-api03-Lr4…d9Hc",
+     "risks": [
+      "shell_history"
+     ],
+     "session_file": null,
+     "severity": "amber",
+     "stored_id": "01DEMO00000000000000000006"
+    },
+    {
+     "cell_line": null,
+     "check": null,
+     "column": 19,
+     "confidence": "high",
+     "id": "c00a833f04",
+     "importable": false,
+     "kind": "api_key",
+     "line": 1,
+     "name": "ANTHROPIC_API_KEY",
+     "not_importable": "duplicate",
+     "notes": [],
+     "path": "/home/demo/projects/workshop/.env",
+     "provider": "anthropic",
+     "redacted": "sk-ant-api03-Lr4…d9Hc",
+     "risks": [],
+     "session_file": null,
+     "severity": "info",
+     "stored_id": "01DEMO00000000000000000006"
+    },
+    {
+     "cell_line": 2,
+     "check": null,
+     "column": 22,
+     "confidence": "high",
+     "id": "8733f19d3b",
+     "importable": true,
+     "kind": "api_key",
+     "line": 4,
+     "name": "GEMINI_API_KEY",
+     "not_importable": null,
+     "notes": [],
+     "path": "/home/demo/notebooks/experiments.ipynb",
+     "provider": "gemini",
+     "redacted": "AIzaSyC…7rTk",
+     "risks": [
+      "notebook",
+      "git_not_ignored"
+     ],
+     "session_file": null,
+     "severity": "amber",
+     "stored_id": null
+    },
+    {
+     "cell_line": null,
+     "check": null,
+     "column": 1,
+     "confidence": "high",
+     "id": "841b9a55be",
+     "importable": true,
+     "kind": "api_key",
+     "line": 7,
+     "name": null,
+     "not_importable": null,
+     "notes": [],
+     "path": "/home/demo/Dropbox/notes/keys.txt",
+     "provider": "xai",
+     "redacted": "xai-Hn6…2cVu",
+     "risks": [
+      "synced_folder"
+     ],
+     "session_file": null,
+     "severity": "amber",
+     "stored_id": null
+    },
+    {
+     "cell_line": null,
+     "check": null,
+     "column": 11,
+     "confidence": "low",
+     "id": "03e41f7e7d",
+     "importable": false,
+     "kind": "api_key",
+     "line": 12,
+     "name": "apiKey",
+     "not_importable": "low_confidence",
+     "notes": [],
+     "path": "/home/demo/projects/landing/src/firebase.ts",
+     "provider": "gemini",
+     "redacted": "AIzaSyB…k4Ds",
+     "risks": [
+      "git_tracked"
+     ],
+     "session_file": null,
+     "severity": "amber",
+     "stored_id": null
+    },
+    {
+     "cell_line": null,
+     "check": null,
+     "column": 22,
+     "confidence": "high",
+     "id": "edbc908bd5",
+     "importable": false,
+     "kind": "oauth_token",
+     "line": 5,
+     "name": null,
+     "not_importable": "session_file",
+     "notes": [],
+     "path": "/home/demo/.codex/auth.json",
+     "provider": "openai",
+     "redacted": "eyJhbGciOi…Qx1w",
+     "risks": [],
+     "session_file": "codex",
+     "severity": "info",
+     "stored_id": null
+    }
+   ],
+   "finished_at": "2026-11-04T09:30:00+00:00",
+   "home": "/home/demo",
+   "roots": [
+    "/home/demo"
+   ],
+   "skipped": {
+    "binary": 96,
+    "cloud_only": 0,
+    "excluded_dir": 214,
+    "protected_dir": 0,
+    "session_file": 0,
+    "symlink_outside": 0,
+    "too_large": 0,
+    "unreadable": 0
+   },
+   "store_checked": true,
+   "warnings": []
+  },
+  "running": false
+ },
+ "scan_imports": {
+  "51fb4161c6": {
+   "added": {
+    "cached": false,
+    "credential": {
+     "active_probe": false,
+     "created_at": "2026-11-04T09:30:00Z",
+     "facts": {
+      "account": {},
+      "expires_at": null,
+      "exposure": null,
+      "funds": null,
+      "funds_info": null,
+      "last_probe_at": null,
+      "last_used_at": null,
+      "limits": null,
+      "probe_model": null,
+      "reasons": [],
+      "status": null
+     },
+     "fingerprint": "974eb063e5f6",
+     "id": "01WEBDEMO00000000000000009",
+     "kind": "api_key",
+     "label": "OPENAI_API_KEY",
+     "linked_path": null,
+     "manual_budget": null,
+     "manual_expires_at": null,
+     "notes": null,
+     "parent_id": null,
+     "pattern_id": null,
+     "provider": "openai",
+     "redacted": "sk-proj-Tg5…b8Xe",
+     "retiring": false,
+     "subscription_until": null,
+     "tags": [],
+     "token_expires_at": null
+    },
+    "last_known": null,
+    "probe_next_at": null,
+    "result": {
+     "account": {},
+     "check_status": "not_checked",
+     "checked_at": "2026-11-04T09:30:00Z",
+     "credential_id": "01WEBDEMO00000000000000009",
+     "error": null,
+     "expiry": {
+      "observed_at": "2026-11-04T09:30:00Z",
+      "source": "inferred",
+      "value": {
+       "expires_at": null,
+       "state": "unknown"
+      }
+     },
+     "funds": {
+      "observed_at": "2026-11-04T09:30:00Z",
+      "source": "inferred",
+      "value": {
+       "amount": null,
+       "currency": null,
+       "state": "unknown"
+      }
+     },
+     "funds_info": null,
+     "http": null,
+     "last_used_at": null,
+     "limits": null,
+     "mode": "offline",
+     "overall": "grey",
+     "reasons": [
+      {
+       "code": "not_checked",
+       "overall": "grey"
+      }
+     ],
+     "validity": {
+      "observed_at": "2026-11-04T09:30:00Z",
+      "source": "inferred",
+      "value": "unknown"
+     }
+    }
+   },
+   "check": {
+    "body": {
+     "cached": false,
+     "credential": {
+      "active_probe": false,
+      "created_at": "2026-11-04T09:30:00Z",
+      "facts": {
+       "account": {},
+       "expires_at": null,
+       "exposure": null,
+       "funds": null,
+       "funds_info": null,
+       "last_probe_at": null,
+       "last_used_at": null,
+       "limits": null,
+       "probe_model": null,
+       "reasons": [],
+       "status": null
+      },
+      "fingerprint": "974eb063e5f6",
+      "id": "01WEBDEMO00000000000000009",
+      "kind": "api_key",
+      "label": "OPENAI_API_KEY",
+      "linked_path": null,
+      "manual_budget": null,
+      "manual_expires_at": null,
+      "notes": null,
+      "parent_id": null,
+      "pattern_id": null,
+      "provider": "openai",
+      "redacted": "sk-proj-Tg5…b8Xe",
+      "retiring": false,
+      "subscription_until": null,
+      "tags": [],
+      "token_expires_at": null
+     },
+     "last_known": {
+      "checked_at": "2026-11-04T09:30:00+00:00",
+      "overall": "green"
+     },
+     "probe_next_at": null,
+     "result": {
+      "account": {},
+      "check_status": "ok",
+      "checked_at": "2026-11-04T09:30:00Z",
+      "credential_id": "01WEBDEMO00000000000000009",
+      "error": null,
+      "expiry": {
+       "observed_at": "2026-11-04T09:30:00Z",
+       "source": "inferred",
+       "value": {
+        "expires_at": null,
+        "state": "unknown"
+       }
+      },
+      "funds": {
+       "observed_at": "2026-11-04T09:30:00Z",
+       "source": "inferred",
+       "value": {
+        "amount": null,
+        "currency": null,
+        "state": "unknown"
+       }
+      },
+      "funds_info": null,
+      "http": {
+       "endpoint": "GET /v1/models",
+       "headers": {},
+       "latency_ms": 196.2,
+       "status": 200
+      },
+      "last_used_at": null,
+      "limits": null,
+      "mode": "passive",
+      "overall": "green",
+      "reasons": [
+       {
+        "code": "valid",
+        "overall": "green"
+       }
+      ],
+      "validity": {
+       "observed_at": "2026-11-04T09:30:00Z",
+       "source": "api",
+       "value": "valid"
+      }
+     }
+    },
+    "status": 200
+   },
+   "probe": {
+    "body": {
+     "cached": false,
+     "credential": {
+      "active_probe": false,
+      "created_at": "2026-11-04T09:30:00Z",
+      "facts": {
+       "account": {},
+       "expires_at": null,
+       "exposure": null,
+       "funds": null,
+       "funds_info": null,
+       "last_probe_at": "2026-11-04T09:30:00Z",
+       "last_used_at": null,
+       "limits": null,
+       "probe_model": null,
+       "reasons": [],
+       "status": null
+      },
+      "fingerprint": "974eb063e5f6",
+      "id": "01WEBDEMO00000000000000009",
+      "kind": "api_key",
+      "label": "OPENAI_API_KEY",
+      "linked_path": null,
+      "manual_budget": null,
+      "manual_expires_at": null,
+      "notes": null,
+      "parent_id": null,
+      "pattern_id": null,
+      "provider": "openai",
+      "redacted": "sk-proj-Tg5…b8Xe",
+      "retiring": false,
+      "subscription_until": null,
+      "tags": [],
+      "token_expires_at": null
+     },
+     "last_known": {
+      "checked_at": "2026-11-04T09:30:00+00:00",
+      "overall": "green"
+     },
+     "probe_next_at": null,
+     "result": {
+      "account": {},
+      "check_status": "ok",
+      "checked_at": "2026-11-04T09:30:00Z",
+      "credential_id": "01WEBDEMO00000000000000009",
+      "error": null,
+      "expiry": {
+       "observed_at": "2026-11-04T09:30:00Z",
+       "source": "inferred",
+       "value": {
+        "expires_at": null,
+        "state": "unknown"
+       }
+      },
+      "funds": {
+       "observed_at": "2026-11-04T09:30:00Z",
+       "source": "inferred",
+       "value": {
+        "amount": null,
+        "currency": null,
+        "state": "unknown"
+       }
+      },
+      "funds_info": null,
+      "http": {
+       "endpoint": "GET /v1/models",
+       "headers": {},
+       "latency_ms": 196.2,
+       "status": 200
+      },
+      "last_used_at": null,
+      "limits": null,
+      "mode": "passive",
+      "overall": "green",
+      "reasons": [
+       {
+        "code": "valid",
+        "overall": "green"
+       }
+      ],
+      "validity": {
+       "observed_at": "2026-11-04T09:30:00Z",
+       "source": "api",
+       "value": "valid"
+      }
+     }
+    },
+    "status": 200
+   },
+   "result": {
+    "credential_id": "01WEBDEMO00000000000000009",
+    "id": "51fb4161c6",
+    "ok": true
+   }
+  },
+  "841b9a55be": {
+   "added": {
+    "cached": false,
+    "credential": {
+     "active_probe": false,
+     "created_at": "2026-11-04T09:30:00Z",
+     "facts": {
+      "account": {},
+      "expires_at": null,
+      "exposure": null,
+      "funds": null,
+      "funds_info": null,
+      "last_probe_at": null,
+      "last_used_at": null,
+      "limits": null,
+      "probe_model": null,
+      "reasons": [],
+      "status": null
+     },
+     "fingerprint": "1de72d4c6ffa",
+     "id": "01WEBDEMO00000000000000011",
+     "kind": "api_key",
+     "label": "keys.txt:7",
+     "linked_path": null,
+     "manual_budget": null,
+     "manual_expires_at": null,
+     "notes": null,
+     "parent_id": null,
+     "pattern_id": null,
+     "provider": "xai",
+     "redacted": "xai-Hn6…2cVu",
+     "retiring": false,
+     "subscription_until": null,
+     "tags": [],
+     "token_expires_at": null
+    },
+    "last_known": null,
+    "probe_next_at": null,
+    "result": {
+     "account": {},
+     "check_status": "not_checked",
+     "checked_at": "2026-11-04T09:30:00Z",
+     "credential_id": "01WEBDEMO00000000000000011",
+     "error": null,
+     "expiry": {
+      "observed_at": "2026-11-04T09:30:00Z",
+      "source": "inferred",
+      "value": {
+       "expires_at": null,
+       "state": "unknown"
+      }
+     },
+     "funds": {
+      "observed_at": "2026-11-04T09:30:00Z",
+      "source": "inferred",
+      "value": {
+       "amount": null,
+       "currency": null,
+       "state": "unknown"
+      }
+     },
+     "funds_info": null,
+     "http": null,
+     "last_used_at": null,
+     "limits": null,
+     "mode": "offline",
+     "overall": "grey",
+     "reasons": [
+      {
+       "code": "not_checked",
+       "overall": "grey"
+      }
+     ],
+     "validity": {
+      "observed_at": "2026-11-04T09:30:00Z",
+      "source": "inferred",
+      "value": "unknown"
+     }
+    }
+   },
+   "check": {
+    "body": {
+     "cached": false,
+     "credential": {
+      "active_probe": false,
+      "created_at": "2026-11-04T09:30:00Z",
+      "facts": {
+       "account": {},
+       "expires_at": null,
+       "exposure": null,
+       "funds": null,
+       "funds_info": null,
+       "last_probe_at": null,
+       "last_used_at": null,
+       "limits": null,
+       "probe_model": null,
+       "reasons": [],
+       "status": null
+      },
+      "fingerprint": "1de72d4c6ffa",
+      "id": "01WEBDEMO00000000000000011",
+      "kind": "api_key",
+      "label": "keys.txt:7",
+      "linked_path": null,
+      "manual_budget": null,
+      "manual_expires_at": null,
+      "notes": null,
+      "parent_id": null,
+      "pattern_id": null,
+      "provider": "xai",
+      "redacted": "xai-Hn6…2cVu",
+      "retiring": false,
+      "subscription_until": null,
+      "tags": [],
+      "token_expires_at": null
+     },
+     "last_known": {
+      "checked_at": "2026-11-04T09:30:00+00:00",
+      "overall": "green"
+     },
+     "probe_next_at": null,
+     "result": {
+      "account": {},
+      "check_status": "ok",
+      "checked_at": "2026-11-04T09:30:00Z",
+      "credential_id": "01WEBDEMO00000000000000011",
+      "error": null,
+      "expiry": {
+       "observed_at": "2026-11-04T09:30:00Z",
+       "source": "inferred",
+       "value": {
+        "expires_at": null,
+        "state": "unknown"
+       }
+      },
+      "funds": {
+       "observed_at": "2026-11-04T09:30:00Z",
+       "source": "inferred",
+       "value": {
+        "amount": null,
+        "currency": null,
+        "state": "unknown"
+       }
+      },
+      "funds_info": null,
+      "http": {
+       "endpoint": "GET /v1/api-key",
+       "headers": {},
+       "latency_ms": 353.1,
+       "status": 200
+      },
+      "last_used_at": null,
+      "limits": null,
+      "mode": "passive",
+      "overall": "green",
+      "reasons": [
+       {
+        "code": "valid",
+        "overall": "green"
+       }
+      ],
+      "validity": {
+       "observed_at": "2026-11-04T09:30:00Z",
+       "source": "api",
+       "value": "valid"
+      }
+     }
+    },
+    "status": 200
+   },
+   "probe": {
+    "body": {
+     "cached": false,
+     "credential": {
+      "active_probe": false,
+      "created_at": "2026-11-04T09:30:00Z",
+      "facts": {
+       "account": {},
+       "expires_at": null,
+       "exposure": null,
+       "funds": null,
+       "funds_info": null,
+       "last_probe_at": "2026-11-04T09:30:00Z",
+       "last_used_at": null,
+       "limits": null,
+       "probe_model": null,
+       "reasons": [],
+       "status": null
+      },
+      "fingerprint": "1de72d4c6ffa",
+      "id": "01WEBDEMO00000000000000011",
+      "kind": "api_key",
+      "label": "keys.txt:7",
+      "linked_path": null,
+      "manual_budget": null,
+      "manual_expires_at": null,
+      "notes": null,
+      "parent_id": null,
+      "pattern_id": null,
+      "provider": "xai",
+      "redacted": "xai-Hn6…2cVu",
+      "retiring": false,
+      "subscription_until": null,
+      "tags": [],
+      "token_expires_at": null
+     },
+     "last_known": {
+      "checked_at": "2026-11-04T09:30:00+00:00",
+      "overall": "green"
+     },
+     "probe_next_at": null,
+     "result": {
+      "account": {},
+      "check_status": "ok",
+      "checked_at": "2026-11-04T09:30:00Z",
+      "credential_id": "01WEBDEMO00000000000000011",
+      "error": null,
+      "expiry": {
+       "observed_at": "2026-11-04T09:30:00Z",
+       "source": "inferred",
+       "value": {
+        "expires_at": null,
+        "state": "unknown"
+       }
+      },
+      "funds": {
+       "observed_at": "2026-11-04T09:30:00Z",
+       "source": "inferred",
+       "value": {
+        "amount": null,
+        "currency": null,
+        "state": "unknown"
+       }
+      },
+      "funds_info": null,
+      "http": {
+       "endpoint": "GET /v1/api-key",
+       "headers": {},
+       "latency_ms": 353.1,
+       "status": 200
+      },
+      "last_used_at": null,
+      "limits": null,
+      "mode": "passive",
+      "overall": "green",
+      "reasons": [
+       {
+        "code": "valid",
+        "overall": "green"
+       }
+      ],
+      "validity": {
+       "observed_at": "2026-11-04T09:30:00Z",
+       "source": "api",
+       "value": "valid"
+      }
+     }
+    },
+    "status": 200
+   },
+   "result": {
+    "credential_id": "01WEBDEMO00000000000000011",
+    "id": "841b9a55be",
+    "ok": true
+   }
+  },
+  "8733f19d3b": {
+   "added": {
+    "cached": false,
+    "credential": {
+     "active_probe": false,
+     "created_at": "2026-11-04T09:30:00Z",
+     "facts": {
+      "account": {},
+      "expires_at": null,
+      "exposure": null,
+      "funds": null,
+      "funds_info": null,
+      "last_probe_at": null,
+      "last_used_at": null,
+      "limits": null,
+      "probe_model": null,
+      "reasons": [],
+      "status": null
+     },
+     "fingerprint": "de7d71d6082c",
+     "id": "01WEBDEMO00000000000000010",
+     "kind": "api_key",
+     "label": "GEMINI_API_KEY",
+     "linked_path": null,
+     "manual_budget": null,
+     "manual_expires_at": null,
+     "notes": null,
+     "parent_id": null,
+     "pattern_id": null,
+     "provider": "gemini",
+     "redacted": "AIzaSyC…7rTk",
+     "retiring": false,
+     "subscription_until": null,
+     "tags": [],
+     "token_expires_at": null
+    },
+    "last_known": null,
+    "probe_next_at": null,
+    "result": {
+     "account": {},
+     "check_status": "not_checked",
+     "checked_at": "2026-11-04T09:30:00Z",
+     "credential_id": "01WEBDEMO00000000000000010",
+     "error": null,
+     "expiry": {
+      "observed_at": "2026-11-04T09:30:00Z",
+      "source": "inferred",
+      "value": {
+       "expires_at": null,
+       "state": "unknown"
+      }
+     },
+     "funds": {
+      "observed_at": "2026-11-04T09:30:00Z",
+      "source": "inferred",
+      "value": {
+       "amount": null,
+       "currency": null,
+       "state": "unknown"
+      }
+     },
+     "funds_info": null,
+     "http": null,
+     "last_used_at": null,
+     "limits": null,
+     "mode": "offline",
+     "overall": "grey",
+     "reasons": [
+      {
+       "code": "not_checked",
+       "overall": "grey"
+      }
+     ],
+     "validity": {
+      "observed_at": "2026-11-04T09:30:00Z",
+      "source": "inferred",
+      "value": "unknown"
+     }
+    }
+   },
+   "check": {
+    "body": {
+     "cached": false,
+     "credential": {
+      "active_probe": false,
+      "created_at": "2026-11-04T09:30:00Z",
+      "facts": {
+       "account": {},
+       "expires_at": null,
+       "exposure": null,
+       "funds": null,
+       "funds_info": null,
+       "last_probe_at": null,
+       "last_used_at": null,
+       "limits": null,
+       "probe_model": null,
+       "reasons": [],
+       "status": null
+      },
+      "fingerprint": "de7d71d6082c",
+      "id": "01WEBDEMO00000000000000010",
+      "kind": "api_key",
+      "label": "GEMINI_API_KEY",
+      "linked_path": null,
+      "manual_budget": null,
+      "manual_expires_at": null,
+      "notes": null,
+      "parent_id": null,
+      "pattern_id": null,
+      "provider": "gemini",
+      "redacted": "AIzaSyC…7rTk",
+      "retiring": false,
+      "subscription_until": null,
+      "tags": [],
+      "token_expires_at": null
+     },
+     "last_known": {
+      "checked_at": "2026-11-04T09:30:00+00:00",
+      "overall": "green"
+     },
+     "probe_next_at": null,
+     "result": {
+      "account": {},
+      "check_status": "ok",
+      "checked_at": "2026-11-04T09:30:00Z",
+      "credential_id": "01WEBDEMO00000000000000010",
+      "error": null,
+      "expiry": {
+       "observed_at": "2026-11-04T09:30:00Z",
+       "source": "inferred",
+       "value": {
+        "expires_at": null,
+        "state": "unknown"
+       }
+      },
+      "funds": {
+       "observed_at": "2026-11-04T09:30:00Z",
+       "source": "inferred",
+       "value": {
+        "amount": null,
+        "currency": null,
+        "state": "unknown"
+       }
+      },
+      "funds_info": null,
+      "http": {
+       "endpoint": "GET /v1beta/models",
+       "headers": {},
+       "latency_ms": 224.5,
+       "status": 200
+      },
+      "last_used_at": null,
+      "limits": null,
+      "mode": "passive",
+      "overall": "green",
+      "reasons": [
+       {
+        "code": "valid",
+        "overall": "green"
+       }
+      ],
+      "validity": {
+       "observed_at": "2026-11-04T09:30:00Z",
+       "source": "api",
+       "value": "valid"
+      }
+     }
+    },
+    "status": 200
+   },
+   "probe": {
+    "body": {
+     "cached": false,
+     "credential": {
+      "active_probe": false,
+      "created_at": "2026-11-04T09:30:00Z",
+      "facts": {
+       "account": {},
+       "expires_at": null,
+       "exposure": null,
+       "funds": null,
+       "funds_info": null,
+       "last_probe_at": "2026-11-04T09:30:00Z",
+       "last_used_at": null,
+       "limits": null,
+       "probe_model": null,
+       "reasons": [],
+       "status": null
+      },
+      "fingerprint": "de7d71d6082c",
+      "id": "01WEBDEMO00000000000000010",
+      "kind": "api_key",
+      "label": "GEMINI_API_KEY",
+      "linked_path": null,
+      "manual_budget": null,
+      "manual_expires_at": null,
+      "notes": null,
+      "parent_id": null,
+      "pattern_id": null,
+      "provider": "gemini",
+      "redacted": "AIzaSyC…7rTk",
+      "retiring": false,
+      "subscription_until": null,
+      "tags": [],
+      "token_expires_at": null
+     },
+     "last_known": {
+      "checked_at": "2026-11-04T09:30:00+00:00",
+      "overall": "green"
+     },
+     "probe_next_at": null,
+     "result": {
+      "account": {},
+      "check_status": "ok",
+      "checked_at": "2026-11-04T09:30:00Z",
+      "credential_id": "01WEBDEMO00000000000000010",
+      "error": null,
+      "expiry": {
+       "observed_at": "2026-11-04T09:30:00Z",
+       "source": "inferred",
+       "value": {
+        "expires_at": null,
+        "state": "unknown"
+       }
+      },
+      "funds": {
+       "observed_at": "2026-11-04T09:30:00Z",
+       "source": "inferred",
+       "value": {
+        "amount": null,
+        "currency": null,
+        "state": "unknown"
+       }
+      },
+      "funds_info": null,
+      "http": {
+       "endpoint": "GET /v1beta/models",
+       "headers": {},
+       "latency_ms": 224.5,
+       "status": 200
+      },
+      "last_used_at": null,
+      "limits": null,
+      "mode": "passive",
+      "overall": "green",
+      "reasons": [
+       {
+        "code": "valid",
+        "overall": "green"
+       }
+      ],
+      "validity": {
+       "observed_at": "2026-11-04T09:30:00Z",
+       "source": "api",
+       "value": "valid"
+      }
+     }
+    },
+    "status": 200
+   },
+   "result": {
+    "credential_id": "01WEBDEMO00000000000000010",
+    "id": "8733f19d3b",
+    "ok": true
+   }
+  }
+ }
 }

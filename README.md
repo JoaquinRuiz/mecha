@@ -85,11 +85,14 @@ mecha scan                       # your home folder, AI tool configs and shell h
 mecha scan ~/Development --json  # only these folders
 mecha scan --import 3f9a1c2b7d   # import a finding (the file is read again)
 mecha scan --check               # validate found keys with their own provider (asks first)
+mecha where 01JD8                # where a stored key was found; --rescan reads those files again
 ```
 
 `mecha scan` looks for AI keys lying around on this machine and lists each one with its file and line, redacted: never the line itself. It runs offline (only `--check` sends keys, each to its own provider's free endpoint) and only when you run it. Everything is listed as information; it goes amber only where a key is a risk: shell history, notebooks, files tracked or not ignored in git, synced folders and files other people on this machine can read. Exit code: `0` nothing risky, `1` something amber, `3` an error. Keys that only look like `AIza…` or a bare `sk-…` are listed apart, as low confidence: they may belong to another service.
 
 It reads the configs of Claude Desktop, Cursor, VS Code, Windsurf and Continue and the zsh, bash, fish and PowerShell histories, and skips dependencies, caches, virtual environments, local model stores, large and binary files, and files that only exist in the cloud (opening those would download them). On macOS, Desktop, Documents, Downloads, iCloud Drive and `~/Library/CloudStorage` are only scanned with `--include-protected`, because the system asks for permission. Where a key Mecha keeps was also found is stored encrypted, and its card turns amber; other locations are never stored.
+
+The dashboard does the same from the «Scan» tab of the add dialog: it scans your home folder in the background (with a Stop button), lists the findings redacted and imports the ones you pick. The detail sheet of a stored key says where it was found and can scan just those files again once you have cleaned them up. From the browser only the home folder can be scanned, never a path you type; the results stay in the server's memory for 30 minutes at most. In `mecha serve --demo` the scan never touches your disk: it finds the same made-up files every time.
 
 **On company laptops**: a program that reads shell histories and config files looking for keys behaves like an infostealer, so security tools (EDR) may flag `mecha scan`. It never runs on its own.
 

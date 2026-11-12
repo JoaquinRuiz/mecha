@@ -583,3 +583,34 @@ def test_permissions_helper_needs_every_folder_open(tmp_path: Path) -> None:
     finally:
         folder.chmod(0o755)
     assert stat.S_IMODE(os.stat(f).st_mode) & stat.S_IROTH
+
+
+# --- scanning single files again (the dashboard's "scan these files again") ---------------
+
+
+def test_a_single_file_inside_a_known_folder_is_read_as_what_it_is(
+    svc: MechaService, tree: Path
+) -> None:
+    home = tree / "home"
+    fish = home / ".local" / "share" / "fish"
+    fish.mkdir(parents=True)
+    (fish / "fish_history").write_text(f"- cmd: export K={ant()}\n  when: 1\n")
+    (home / "other.txt").write_text(f"{ant()}\n")
+    report = svc.scan(Options(roots=[fish / "fish_history"]), env=env(tree))
+    assert [f.location.path.name for f in report.findings] == ["fish_history"]
+    assert report.findings[0].risks == (Risk.shell_history,)
+
+
+def test_stop_cancels_between_files(svc: MechaService, tree: Path) -> None:
+    from mecha.scan.walk import ScanCancelled
+
+    for i in range(3):
+        (tree / "home" / f"{i}.txt").write_text("x\n")
+    seen: list[int] = []
+
+    def progress(n: int, _p: Path) -> None:
+        seen.append(n)
+
+    with pytest.raises(ScanCancelled):
+        svc.scan(Options(roots=[tree]), env=env(tree), progress=progress, stop=lambda: bool(seen))
+    assert seen == [1]

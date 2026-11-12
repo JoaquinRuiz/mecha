@@ -29,7 +29,11 @@ export interface Credential {
   active_probe: boolean
   parent_id: string | null
   manual_budget: { amount: string; currency: string; purchased_at: string } | null
-  facts?: { funds?: { scope: string | null; by: string | null } | null }
+  facts?: {
+    funds?: { scope: string | null; by: string | null } | null
+    /** Last `mecha scan` that found this key in plaintext (locations: `api.exposures`). */
+    exposure?: { risky: number; info: number; scanned_at: string } | null
+  }
 }
 
 export interface RateWindow {
@@ -148,3 +152,77 @@ export interface LinkCandidate {
 }
 
 export const OVERALL_ORDER: Overall[] = ['red', 'amber', 'grey', 'local', 'green']
+
+// --- mecha scan ------------------------------------------------------------------------
+
+export type Risk =
+  | 'shell_history'
+  | 'notebook'
+  | 'git_tracked'
+  | 'git_not_ignored'
+  | 'synced_folder'
+  | 'readable_by_others'
+
+/** A key found in plaintext: where and what (redacted), never the key or the line. */
+export interface ScanFinding {
+  id: string
+  path: string
+  line: number
+  cell_line: number | null
+  column: number
+  provider: ProviderId | null
+  kind: Kind | null
+  redacted: string
+  name: string | null
+  confidence: 'high' | 'low'
+  severity: 'amber' | 'info'
+  risks: Risk[]
+  notes: string[]
+  stored_id: string | null
+  session_file: string | null
+  importable: boolean
+  not_importable: string | null
+  check: string | null
+}
+
+export interface ScanReport {
+  home: string
+  roots: string[]
+  store_checked: boolean
+  warnings: string[]
+  files_scanned: number
+  skipped: Record<string, number>
+  finished_at: string | null
+  expires_at: string | null
+  findings: ScanFinding[]
+}
+
+export interface ScanState {
+  running: boolean
+  /** macOS: Desktop, Documents, Downloads and cloud folders need explicit consent. */
+  protected_option: boolean
+  report: ScanReport | null
+}
+
+export interface ScanImportResult {
+  id: string
+  ok: boolean
+  credential_id?: string
+  code?: string
+  message?: string
+}
+
+export interface Exposure {
+  path: string
+  line: number
+  cell_line: number | null
+  column: number
+  risks: Risk[]
+  seen_at: string
+}
+
+export interface Exposures {
+  home: string
+  scanned_at: string | null
+  exposures: Exposure[]
+}

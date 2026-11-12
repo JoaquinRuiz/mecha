@@ -9,10 +9,12 @@ from __future__ import annotations
 
 import hashlib
 import random
-from collections.abc import Iterable
+import time
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from pathlib import Path
 from typing import Any
 
 from mecha.core.config import Config
@@ -25,6 +27,7 @@ from mecha.core.models import (
     CredentialKind,
     Expiry,
     ExpiryState,
+    ExposureSummary,
     Funds,
     FundsState,
     HttpTrace,
@@ -39,8 +42,13 @@ from mecha.core.models import (
 )
 from mecha.core.service import CredentialStatus, MechaService
 from mecha.core.status import Observation, evaluate
+from mecha.core.ulid import new_ulid
 from mecha.linked import Tool
 from mecha.providers.base import Provider
+from mecha.scan.model import Confidence, Finding, Location, PlaceKind, Risk, ScanReport
+from mecha.scan.risk import inside
+from mecha.scan.walk import Options as ScanOptions
+from mecha.scan.walk import ScanCancelled
 from mecha.store.db import Store, open_memory_store
 
 DEMO_NOW = datetime(2026, 11, 4, 9, 30, tzinfo=UTC)
@@ -399,7 +407,15 @@ def build_demo_store(scenarios: Iterable[Scenario] = SCENARIOS) -> Store:
             manual_budget=s.budget,
             facts=CredentialFacts.model_validate(s.facts),
         )
+        exposures = demo_exposures(s.label)
+        if exposures:
+            risky = sum(1 for e in exposures if e["risks"])
+            cred.facts.exposure = ExposureSummary(
+                risky=risky, info=len(exposures) - risky, scanned_at=DEMO_NOW - timedelta(days=2)
+            )
         store.insert(cred, None)  # no secret, ever
+        if exposures:
+            store.set_exposures(cred.id, exposures, DEMO_NOW - timedelta(days=2))
         if s.never_checked or cred.kind.is_oauth:
             continue
         for point in range(HISTORY_POINTS):
@@ -408,6 +424,115 @@ def build_demo_store(scenarios: Iterable[Scenario] = SCENARIOS) -> Store:
             obs = _observation(s, at, round(rng.uniform(120, 480), 1), final=final)
             store.add_result(evaluate(cred, obs, at), obs)
     return store
+
+
+# --- the demo's scan: made-up files in a made-up home, never this machine's disk ---------
+DEMO_HOME = Path("/home/demo")
+DEMO_SCAN_FILES = 1843  # what the progress counts up to
+
+
+@dataclass(frozen=True)
+class DemoFound:
+    where: str  # relative to DEMO_HOME
+    line: int
+    column: int
+    provider: ProviderId | None
+    kind: CredentialKind | None
+    redacted: str
+    name: str | None
+    confidence: Confidence = Confidence.high
+    risks: tuple[Risk, ...] = ()
+    cell_line: int | None = None
+    place: PlaceKind = PlaceKind.text
+    session_file: str | None = None
+    stored: str | None = None  # label of the demo credential this key is
+
+    @property
+    def path(self) -> Path:
+        return DEMO_HOME / self.where
+
+    @property
+    def fingerprint(self) -> str:
+        return _fingerprint(self.stored or f"found:{self.where}:{self.line}:{self.column}")
+
+    def finding(self) -> Finding:
+        return Finding(
+            location=Location(self.path, self.line, self.column, self.cell_line, self.place),
+            provider=self.provider.value if self.provider else None,
+            kind=self.kind.value if self.kind else None,
+            pattern_id=None,
+            redacted=self.redacted,
+            confidence=self.confidence,
+            name=self.name,
+            storable=self.session_file is None,
+            session_file=self.session_file,
+            risks=self.risks,
+            fingerprint=self.fingerprint,
+        )
+
+    def exposure(self) -> dict[str, object]:
+        return {
+            "path": str(self.path),
+            "line": self.line,
+            "cell_line": self.cell_line,
+            "column": self.column,
+            "risks": [r.value for r in self.risks],
+            "seen_at": (DEMO_NOW - timedelta(days=2)).isoformat(),
+        }
+
+
+DEMO_FOUND: tuple[DemoFound, ...] = (
+    DemoFound("projects/chatbot/.env", 3, 16, P.openai, K.api_key, "sk-proj-Tg5…b8Xe",
+              "OPENAI_API_KEY"),
+    DemoFound(".zsh_history", 1042, 33, P.anthropic, K.api_key, "sk-ant-api03-Lr4…d9Hc",
+              "ANTHROPIC_API_KEY", risks=(Risk.shell_history,), place=PlaceKind.history_zsh,
+              stored="Demo day key"),
+    DemoFound("projects/workshop/.env", 1, 19, P.anthropic, K.api_key, "sk-ant-api03-Lr4…d9Hc",
+              "ANTHROPIC_API_KEY", stored="Demo day key"),
+    DemoFound("notebooks/experiments.ipynb", 4, 22, P.gemini, K.api_key, "AIzaSyC…7rTk",
+              "GEMINI_API_KEY", risks=(Risk.notebook, Risk.git_not_ignored), cell_line=2,
+              place=PlaceKind.notebook),
+    DemoFound("Dropbox/notes/keys.txt", 7, 1, P.xai, K.api_key, "xai-Hn6…2cVu", None,
+              risks=(Risk.synced_folder,)),
+    DemoFound("projects/landing/src/firebase.ts", 12, 11, P.gemini, K.api_key, "AIzaSyB…k4Ds",
+              "apiKey", confidence=Confidence.low, risks=(Risk.git_tracked,)),
+    DemoFound(".codex/auth.json", 5, 22, P.openai, K.oauth_token, "eyJhbGciOi…Qx1w", None,
+              session_file="codex"),
+)  # fmt: skip
+
+
+def demo_exposures(label: str) -> list[dict[str, object]]:
+    return [f.exposure() for f in DEMO_FOUND if f.stored == label]
+
+
+def demo_report(
+    roots: Iterable[Path],
+    progress: Callable[[int, Path], None] | None = None,
+    stop: Callable[[], bool] | None = None,
+    seconds: float = 0.0,
+) -> ScanReport:
+    """The demo's scan of ``roots`` (the demo home by default): canned findings only."""
+    wanted = list(roots) or [DEMO_HOME]
+    found = [f for f in DEMO_FOUND if inside(f.path, wanted)]
+    files = DEMO_SCAN_FILES if wanted == [DEMO_HOME] else len({f.path for f in found})
+    steps = 20
+    for step in range(1, steps + 1):
+        if stop is not None and stop():
+            raise ScanCancelled
+        if seconds:
+            time.sleep(seconds / steps)
+        if progress is not None:
+            progress(files * step // steps, DEMO_HOME)
+    report = ScanReport(roots=wanted, findings=[f.finding() for f in found], files_scanned=files)
+    report.skipped.excluded_dir = 214 if wanted == [DEMO_HOME] else 0
+    report.skipped.binary = 96 if wanted == [DEMO_HOME] else 0
+    return report
+
+
+def _demo_not_importable(f: Finding) -> str | None:
+    from mecha.core.service import _not_importable
+
+    return _not_importable(f)
 
 
 class DemoService(MechaService):
@@ -433,6 +558,55 @@ class DemoService(MechaService):
     ) -> CredentialStatus:
         # Linking would read real session files from this machine (email, plan) into a demo.
         raise DetectionError("Demo mode does not read session files from this machine.")
+
+    # The scan never reads this machine's disk: someone recording a video of the demo
+    # would show their own folders. It finds the same made-up files every time.
+    scan_seconds = 1.5  # long enough to show the progress and the Stop button
+
+    def scan_home(self) -> Path:
+        return DEMO_HOME
+
+    def scan_has_protected(self) -> bool:
+        return True  # the demo's made-up home is a Mac's
+
+    def read_files(
+        self,
+        options: ScanOptions,
+        store: Store | None,
+        env: object = None,
+        progress: Callable[[int, Path], None] | None = None,
+        stop: Callable[[], bool] | None = None,
+    ) -> ScanReport:
+        return demo_report(options.roots, progress, stop, self.scan_seconds)
+
+    def import_found(self, report: ScanReport, ids: Iterable[str]) -> list[dict[str, object]]:
+        """Like the real import but without reading any file: the redacted form only."""
+        by_id = {f.location.id: f for f in report.findings}
+        results: list[dict[str, object]] = []
+        for fid in ids:
+            f = by_id.get(fid)
+            reason = "not_found" if f is None else _demo_not_importable(f)
+            if f is None or reason is not None:
+                results.append({"id": fid, "ok": False, "code": reason})
+                continue
+            fingerprint = f.fingerprint or _fingerprint(fid)
+            existing = self.store.by_fingerprint(fingerprint)
+            if existing is not None:
+                results.append({"id": fid, "ok": False, "code": "duplicate"})
+                continue
+            cred = Credential(
+                id=new_ulid(),
+                label=f.name or f"{f.location.path.name}:{f.location.line}",
+                provider=ProviderId(f.provider or ""),
+                kind=CredentialKind(f.kind or "api_key"),
+                pattern_id=None,
+                redacted=f.redacted,
+                fingerprint=fingerprint,
+                created_at=self.now(),
+            )
+            self.store.insert(cred, None)
+            results.append({"id": fid, "ok": True, "credential_id": cred.id})
+        return results
 
     def is_fresh(self, cred: Credential, now: datetime) -> bool:
         return False  # every demo check "runs"

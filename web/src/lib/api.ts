@@ -4,9 +4,12 @@ import type {
   CredentialStatus,
   Detection,
   EnvEntry,
+  Exposures,
   LinkCandidate,
   Listing,
   ProviderInfo,
+  ScanImportResult,
+  ScanState,
 } from './types'
 
 export interface NewCredential {
@@ -83,6 +86,20 @@ export function makeApi(token: string | null) {
         '/linked',
         json({ tool, path: path || null, label: label || null }),
       ),
+    // mecha scan. Paths only ever travel in response bodies, never in a URL.
+    scanStart: (includeProtected = false) =>
+      apiFetch<{ started: boolean }>(token, '/scan', json({ include_protected: includeProtected })),
+    scanStop: () => apiFetch<{ stopping: boolean }>(token, '/scan/stop', { method: 'POST' }),
+    scanState: () => apiFetch<ScanState>(token, '/scan'),
+    scanImport: (ids: string[]) =>
+      apiFetch<{ results: ScanImportResult[] }>(token, '/scan/import', json({ ids })),
+    exposures: (id: string) =>
+      apiFetch<Exposures>(token, `/credentials/${encodeURIComponent(id)}/exposures`),
+    /** Reads again only the files this key was found in (the server knows which). */
+    rescanExposures: (id: string) =>
+      apiFetch<Exposures>(token, `/credentials/${encodeURIComponent(id)}/exposures/rescan`, {
+        method: 'POST',
+      }),
   }
 }
 

@@ -346,3 +346,83 @@ test('language switch: remembered across reloads; footer credits the author', as
   )
   expect(problems).toEqual([])
 })
+
+test('scan tab: progress, Stop, redacted findings, import; no path ever in a URL', async ({
+  page,
+}) => {
+  const problems = await guard(page)
+  const urls: string[] = []
+  page.on('request', (r) => urls.push(r.url()))
+  await load(page)
+  await page.keyboard.press('n')
+  const dialog = page.getByTestId('add-dialog')
+  await dialog.getByRole('tab', { name: /^Scan$|^Escanear$/ }).click()
+  const panel = dialog.getByTestId('scan-panel')
+  await expect(panel).toContainText(/Offline|Sin conexión/)
+  await expect(panel.getByLabel(/Also Desktop|También Escritorio/)).toBeVisible()
+
+  // Stopped half-way: nothing kept.
+  await panel.getByRole('button', { name: /Scan my home folder|Escanear mi carpeta/ }).click()
+  await panel.getByRole('button', { name: /^Stop$|^Detener$/ }).click()
+  await expect(panel).toContainText(/Scan stopped|Escaneo detenido/)
+  await expect(panel.getByTestId('scan-report')).toHaveCount(0)
+
+  await panel.getByRole('button', { name: /Scan my home folder|Escanear mi carpeta/ }).click()
+  await expect(panel.getByTestId('scan-progress')).toBeVisible()
+  const report = panel.getByTestId('scan-report')
+  await expect(report).toBeVisible({ timeout: 10_000 })
+  await expect(report).toContainText(/1,843 files read|1843 ficheros leídos|1.843 ficheros/)
+  await expect(report).toContainText('~/.zsh_history:1042')
+  await expect(report).toContainText(/shell history|historial de la terminal/)
+  await expect(report).toContainText(/cell 4, line 2|celda 4, línea 2/)
+  await expect(report.locator('[data-severity="amber"]').first()).toBeVisible()
+  expect(await page.content()).not.toContain('/home/demo/.zsh_history') // shown as ~ only
+
+  const axe = await new AxeBuilder({ page }).include('[data-testid="add-dialog"]').analyze()
+  expect(axe.violations.map((v) => `${v.id}: ${v.nodes.length}`)).toEqual([])
+
+  await report.getByRole('checkbox', { name: /projects\/chatbot\/\.env/ }).check()
+  await report.getByRole('button', { name: /Import 1|Importar 1/ }).click()
+  await expect(dialog).toBeHidden()
+  await expect(page.getByTestId('credential-card')).toHaveCount(21)
+
+  // The imported key now shows as already in Mecha, with a way to its sheet.
+  await page.keyboard.press('n')
+  await dialog.getByRole('tab', { name: /^Scan$|^Escanear$/ }).click()
+  const stored = dialog.getByTestId('scan-finding').filter({ hasText: 'chatbot/.env' })
+  await stored.getByRole('button', { name: /Open|Abrir/ }).click()
+  await expect(dialog).toBeHidden()
+  const sheet = page.getByTestId('detail-sheet')
+  await expect(sheet).toContainText('OPENAI_API_KEY')
+  await sheet.getByRole('button', { name: /^Delete$|^Borrar$/ }).click()
+  await page
+    .getByTestId('delete-dialog')
+    .getByRole('button', { name: /^Delete$|^Borrar$/ })
+    .click()
+  await expect(page.getByTestId('credential-card')).toHaveCount(20)
+
+  for (const url of urls) {
+    expect(url).not.toMatch(/home|demo%2F|zsh|\.env|ipynb/i)
+  }
+  expect(problems).toEqual([])
+})
+
+test('detail sheet: where a stored key was found, and scanning those files again', async ({
+  page,
+}) => {
+  const problems = await guard(page)
+  await load(page)
+  await page.getByRole('button', { name: 'Demo day key', exact: true }).click()
+  const sheet = page.getByTestId('detail-sheet')
+  const where = sheet.getByTestId('exposures')
+  await expect(where).toContainText('~/.zsh_history:1042')
+  await expect(where).toContainText('~/projects/workshop/.env:1')
+  await expect(where).toContainText(/shell history|historial de la terminal/)
+  await expect(where).toContainText(/no risk|sin riesgo/)
+  await expect(sheet).toContainText(/Also in plaintext|También en texto plano/)
+  await where.getByRole('button', { name: /Scan these files again|Volver a escanear/ }).click()
+  await expect(where).toContainText('~/.zsh_history:1042')
+  const axe = await new AxeBuilder({ page }).include('[data-testid="detail-sheet"]').analyze()
+  expect(axe.violations.map((v) => `${v.id}: ${v.nodes.length}`)).toEqual([])
+  expect(problems).toEqual([])
+})
